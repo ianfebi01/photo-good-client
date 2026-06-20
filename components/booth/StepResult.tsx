@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Loader2, RefreshCw, CheckCircle2, AlertCircle } from 'lucide-react'
+import { Loader2, RefreshCw, CheckCircle2, AlertCircle, QrCode } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { BoothQR } from '@/components/booth/BoothQR'
@@ -14,6 +14,62 @@ import {
 
 type GenStatus = 'idle' | 'loading' | 'ready' | 'error' | 'unavailable'
 type SyncStatus = 'idle' | 'syncing' | 'done' | 'error'
+
+function isSettled( s: GenStatus ) {
+  return s === 'ready' || s === 'error' || s === 'unavailable'
+}
+
+// ── Sub-component: Sync status banner ─────────────────────────────
+
+function SyncStatusBanner( {
+  status,
+  error,
+  onRetry,
+}: {
+  status: SyncStatus
+  error: string | null
+  onRetry: () => void
+} ) {
+  if ( status === 'syncing' ) {
+    return (
+      <div className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-full bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
+        <Loader2 className="size-4 animate-spin" />
+        Uploading to server&hellip;
+      </div>
+    )
+  }
+
+  if ( status === 'done' ) {
+    return (
+      <div className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-full bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">
+        <CheckCircle2 className="size-4" />
+        Uploaded to server
+      </div>
+    )
+  }
+
+  if ( status === 'error' ) {
+    return (
+      <div className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-full bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-300">
+        <AlertCircle className="size-4" />
+        Upload failed{error ? `: ${error}` : ''}
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-6 px-2 ml-1 text-xs"
+          onClick={onRetry}
+        >
+          <RefreshCw className="mr-1 size-3" />
+          Retry
+        </Button>
+      </div>
+    )
+  }
+
+  return null
+}
+
+// ── Main component ─────────────────────────────────────────────────
 
 export function StepResult() {
   const {
@@ -29,22 +85,32 @@ export function StepResult() {
     setLoopVideoUrl,
   } = useBoothStore()
 
-  const [videoStatus, setVideoStatus] = useState<GenStatus>(
+  // ── Derive initial statuses from persisted store values ─────────
+  const [videoStatus, setVideoStatus] = useState<GenStatus>( () =>
     videoUrl ? 'ready' : 'idle',
   )
-  const [loopStatus, setLoopStatus] = useState<GenStatus>(
+  const [loopStatus, setLoopStatus] = useState<GenStatus>( () =>
     loopVideoUrl ? 'ready' : 'idle',
   )
 
+  // Ref-based guards for one-shot generation & sync
   const startedRef = useRef( { video : false, loop : false } )
+  const syncAttemptedRef = useRef( false )
 
-  // ── Server sync state ──────────────────────────────────────────
-  const [syncStatus, setSyncStatus] = useState<SyncStatus>( 'idle' )
-  const [syncError, setSyncError] = useState<string | null>( null )
-  const [resultSessionId, setResultSessionId] = useState<string | null>( null )
-  const syncStartedRef = useRef( false )
+  // ── Reset in-flight guards when the session changes ──────────────
+  // Must be in a useEffect (before the generation effect) to comply
+  // with React 19's rule against reading/writing refs during render.
+  useEffect( () => {
+    startedRef.current = { video : false, loop : false }
+    syncAttemptedRef.current = false
+    // Re-derive statuses from (potentially new) store values.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setVideoStatus( videoUrl ? 'ready' : 'idle' )
+    setLoopStatus( loopVideoUrl ? 'ready' : 'idle' )
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId] )
 
-  // Kick off video generation after the strip is ready
+  // ── Kick off video generation after the strip is ready ──────────
   useEffect( () => {
     if ( !strip || photos.length === 0 ) return
 
@@ -82,9 +148,23 @@ export function StepResult() {
         } )
         .catch( () => setLoopStatus( 'error' ) )
     }
-  }, [strip, photos, sessionId, countdownClips, videoUrl, loopVideoUrl, frameKey, setVideoUrl, setLoopVideoUrl] )
+  }, [
+    strip,
+    photos,
+    sessionId,
+    countdownClips,
+    videoUrl,
+    loopVideoUrl,
+    frameKey,
+    setVideoUrl,
+    setLoopVideoUrl,
+  ] )
 
-  // ── Sync all results to the external server ────────────────────
+  // ── Server sync ─────────────────────────────────────────────────
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>( 'idle' )
+  const [syncError, setSyncError] = useState<string | null>( null )
+  const [resultSessionId, setResultSessionId] = useState<string | null>( null )
+
   const doSync = useCallback( async () => {
     if ( !strip || photos.length === 0 ) return
 
@@ -110,74 +190,89 @@ export function StepResult() {
     }
   }, [strip, photos, sessionId, frameKey, videoUrl, loopVideoUrl, countdownClips] )
 
-  // Auto-trigger sync once both video statuses have settled
+  // Auto-trigger sync once both video statuses have settled.
+  // Only fires once per session — manual retry calls doSync() directly.
   useEffect( () => {
-    if ( syncStartedRef.current ) return
+    if ( syncAttemptedRef.current ) return
     if ( !strip || photos.length === 0 ) return
+    if ( !isSettled( videoStatus ) || !isSettled( loopStatus ) ) return
 
-    // Wait until both video tasks have settled (ready / error / unavailable).
-    // 'idle' or 'loading' means work is still in-flight.
-    const videoSettled = videoStatus === 'ready' || videoStatus === 'error' || videoStatus === 'unavailable'
-    const loopSettled = loopStatus === 'ready' || loopStatus === 'error' || loopStatus === 'unavailable'
-    if ( !videoSettled || !loopSettled ) return
-
-    syncStartedRef.current = true
+    syncAttemptedRef.current = true
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     doSync()
   }, [strip, photos, videoStatus, loopStatus, doSync] )
 
-  const retrySync = () => {
-    syncStartedRef.current = false
-    setSyncStatus( 'idle' )
-    setSyncError( null )
+  // Manual retry — calls doSync directly without waiting for the
+  // auto-trigger effect (avoids double-fire).
+  const retrySync = useCallback( () => {
     doSync()
-  }
+  }, [doSync] )
 
+  // ── Early return: no strip yet ──────────────────────────────────
   if ( !strip ) return null
 
   return (
     <div className="container px-4 py-8 mx-auto overflow-auto lg:py-12 grow scrollbar-none">
-      {/* ── Header ─────────────────────────────────────────────── */}
+      {/* ── Header ───────────────────────────────────────────────── */}
       <div className="mb-10 space-y-2 text-center">
         <h2 className="text-3xl font-bold tracking-tight lg:text-4xl text-foreground">
           Your photos are ready!
         </h2>
         <p className="max-w-md mx-auto text-sm text-muted-foreground lg:text-base">
-          Download your photo strip, countdown mashup, or 15-second loop video below.
+          Download your photo strip, countdown mashup, or 15-second loop
+          video below.
         </p>
       </div>
 
-      {/* ── Upload status banner ──────────────────────────────── */}
-      <div className="flex items-center justify-center gap-2 mb-6">
-        {syncStatus === 'syncing' && (
-          <div className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-full bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
-            <Loader2 className="size-4 animate-spin" />
-            Uploading to server&hellip;
-          </div>
+      {/* ── Video generation status ──────────────────────────────── */}
+      <div className="flex flex-wrap items-center justify-center gap-3 mb-4">
+        {videoStatus === 'loading' && (
+          <span className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-full bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
+            <Loader2 className="size-3 animate-spin" />
+            Generating mashup video&hellip;
+          </span>
         )}
-        {syncStatus === 'done' && (
-          <div className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-full bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">
-            <CheckCircle2 className="size-4" />
-            Uploaded to server
-          </div>
+        {videoStatus === 'error' && (
+          <span className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-full bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-300">
+            <AlertCircle className="size-3" />
+            Mashup video failed
+          </span>
         )}
-        {syncStatus === 'error' && (
-          <div className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-full bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-300">
-            <AlertCircle className="size-4" />
-            Upload failed{syncError ? `: ${syncError}` : ''}
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-6 px-2 ml-1 text-xs"
-              onClick={retrySync}
-            >
-              <RefreshCw className="mr-1 size-3" />
-              Retry
-            </Button>
-          </div>
+        {videoStatus === 'unavailable' && (
+          <span className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-full bg-gray-50 text-gray-500 dark:bg-gray-800 dark:text-gray-400">
+            Mashup unavailable
+          </span>
+        )}
+
+        {loopStatus === 'loading' && (
+          <span className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-full bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
+            <Loader2 className="size-3 animate-spin" />
+            Generating loop video&hellip;
+          </span>
+        )}
+        {loopStatus === 'error' && (
+          <span className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-full bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-300">
+            <AlertCircle className="size-3" />
+            Loop video failed
+          </span>
+        )}
+        {loopStatus === 'unavailable' && (
+          <span className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-full bg-gray-50 text-gray-500 dark:bg-gray-800 dark:text-gray-400">
+            Loop unavailable
+          </span>
         )}
       </div>
 
-      {/* ── QR Code + Strip preview ──────────────────────────── */}
+      {/* ── Upload status banner ─────────────────────────────────── */}
+      <div className="flex items-center justify-center gap-2 mb-6">
+        <SyncStatusBanner
+          status={syncStatus}
+          error={syncError}
+          onRetry={retrySync}
+        />
+      </div>
+
+      {/* ── QR Code + Strip preview ──────────────────────────────── */}
       <div className="flex flex-col items-center gap-8 lg:flex-row lg:justify-center lg:items-start">
         {/* Strip preview */}
         {strip && (
@@ -191,26 +286,38 @@ export function StepResult() {
           </div>
         )}
 
-        {/* QR Code */}
-        {syncStatus === 'done' && resultSessionId && (
-          <div className="flex flex-col items-center gap-4">
-            <BoothQR page={`${process.env.NEXT_PUBLIC_BASE_URL || ''}/r/${resultSessionId}`} />
-            <p className="text-sm text-muted-foreground text-center max-w-xs">
-              Scan to view &amp; download your photos on your phone
-            </p>
-          </div>
-        )}
-
-        {syncStatus === 'syncing' && (
-          <div className="flex flex-col items-center gap-4 py-12">
-            <Loader2 className="size-10 animate-spin text-muted-foreground" />
-            <p className="text-sm text-muted-foreground">Generating QR code&hellip;</p>
-          </div>
-        )}
+        {/* QR Code — always occupies its space to prevent layout shift */}
+        <div className="flex flex-col items-center gap-4">
+          {syncStatus === 'done' && resultSessionId ? (
+            <>
+              <BoothQR
+                page={`${process.env.NEXT_PUBLIC_BASE_URL || ''}/r/${resultSessionId}`}
+              />
+              <p className="text-sm text-muted-foreground text-center max-w-xs">
+                Scan to view &amp; download your photos on your phone
+              </p>
+            </>
+          ) : (
+            // Placeholder that mirrors BoothQR dimensions exactly —
+            // prevents layout shift when the real QR renders in.
+            <div className="flex flex-col items-center gap-3 p-4">
+              <div className="flex items-center gap-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                <QrCode className="size-4" />
+                Scan to open on phone
+              </div>
+              <div className="relative size-50 rounded-xl border bg-secondary/50 shadow-sm flex items-center justify-center">
+                <Loader2 className="size-8 animate-spin text-muted-foreground/60" />
+              </div>
+              <span className="text-xs text-muted-foreground h-8" />
+            </div>
+          )}
+        </div>
       </div>
-      {/* ── Bottom actions ──────────────────────────────────────── */}
+
+      {/* ── Bottom actions ────────────────────────────────────────── */}
       <div className="flex justify-center gap-3 mt-10">
-        <Button size="lg"
+        <Button
+          size="lg"
           variant="outline"
           onClick={reset}
         >

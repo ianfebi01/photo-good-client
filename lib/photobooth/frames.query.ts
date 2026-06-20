@@ -406,7 +406,7 @@ export async function syncSessionToServer( {
   videoUrl: string | null
   loopVideoUrl: string | null
   countdownClipFiles: string[]
-} ): Promise<{ success: boolean; error?: string }> {
+} ): Promise<{ success: boolean; sessionId?: string; error?: string }> {
   if ( !EXTERNAL_BASE ) {
     return { success : false, error : 'NEXT_PUBLIC_BASE_URL is not configured' }
   }
@@ -469,7 +469,9 @@ export async function syncSessionToServer( {
       return { success : false, error : `Result creation failed: ${errData}` }
     }
 
-    return { success : true }
+    const resultData = await resultRes.json().catch( () => ( {} ) )
+
+    return { success : true, sessionId : resultData.sessionId || sessionId }
   } catch ( err ) {
     return {
       success : false,

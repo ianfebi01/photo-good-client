@@ -158,6 +158,11 @@ export function StepResult() {
     doSync()
   }, [doSync] )
 
+  const resetSession = useCallback( () => {
+    reset()
+    router.push( '/' )
+  }, [reset, router] )
+
   // ── Idle timer expiry → navigate home ───────────────────────────
   // StepTimer counts down and calls reset() when it reaches 1.
   // On the result step, we navigate to the homepage instead of
@@ -165,9 +170,9 @@ export function StepResult() {
   useEffect( () => {
     if ( !timerEnabled || timerSecondsLeft === null ) return
     if ( timerSecondsLeft <= 1 ) {
-      router.push( '/' )
+      resetSession()
     }
-  }, [timerSecondsLeft, timerEnabled, router] )
+  }, [timerSecondsLeft, timerEnabled, resetSession] )
 
   // ── Early return: no strip yet ──────────────────────────────────
   if ( !strip ) return null
@@ -226,7 +231,7 @@ export function StepResult() {
         <Button
           size="lg"
           variant="outline"
-          onClick={reset}
+          onClick={resetSession}
         >
           Start new session
         </Button>

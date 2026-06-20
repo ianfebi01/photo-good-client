@@ -9,6 +9,7 @@ import AppCard from '@/components/AppCard'
 import Link from 'next/link'
 import { FRAMES_QUERY_KEY } from '@/lib/photobooth/frames.query'
 import { getFramesForSsr } from '@/lib/photobooth/frames.query.server'
+import { FrameSyncTrigger } from '@/components/FrameSyncTrigger'
 
 export default async function Home() {
   const queryClient = new QueryClient()
@@ -19,6 +20,7 @@ export default async function Home() {
 
   return (
     <HydrationBoundary state={dehydrate( queryClient )}>
+      <FrameSyncTrigger />
       <main className="min-h-screen lg:min-h-[unset] lg:h-screen bg-white">
         <div className="container px-4 py-8 mx-auto lg:py-16 lg:h-full">
           <div

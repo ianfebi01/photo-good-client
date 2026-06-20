@@ -24,8 +24,11 @@
 .DS_Store
 *.pem
 
-# photobooth captures
+# photobooth captures & synced frames
 /public/captures
+/public/frames/*.jpg
+/public/frames/*.png
+/public/frames/manifest.json
 /public/frames/user
 
 # camera-service python virtualenv

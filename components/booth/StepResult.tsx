@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Download, Film, Images, Loader2, RefreshCw, Repeat, Clapperboard, ImageDown } from 'lucide-react'
+import { Download, Film, Images, Loader2, RefreshCw, Repeat, Clapperboard, ImageDown, CloudUpload, CheckCircle2, AlertCircle } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -10,9 +10,11 @@ import {
   generateSessionVideo,
   generateSessionLoopVideo,
   convertCountdownClip,
+  syncSessionToServer,
 } from '@/lib/photobooth/frames.query'
 
 type GenStatus = 'idle' | 'loading' | 'ready' | 'error' | 'unavailable'
+type SyncStatus = 'idle' | 'syncing' | 'done' | 'error'
 
 export function StepResult() {
   const {
@@ -36,6 +38,11 @@ export function StepResult() {
   )
 
   const startedRef = useRef( { video : false, loop : false } )
+
+  // ── Server sync state ──────────────────────────────────────────
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>( 'idle' )
+  const [syncError, setSyncError] = useState<string | null>( null )
+  const syncStartedRef = useRef( false )
 
   // Index of the clip currently being converted to MP4 for download (or null).
   const [downloadingClip, setDownloadingClip] = useState<number | null>( null )
@@ -127,6 +134,53 @@ export function StepResult() {
     }
   }, [strip, photos, sessionId, countdownClips, videoUrl, loopVideoUrl, frameKey, setVideoUrl, setLoopVideoUrl] )
 
+  // ── Sync all results to the external server ────────────────────
+  const doSync = useCallback( async () => {
+    if ( !strip || photos.length === 0 ) return
+
+    setSyncStatus( 'syncing' )
+    setSyncError( null )
+
+    const result = await syncSessionToServer( {
+      sessionId,
+      frameKey,
+      stripUrl           : strip,
+      photoFiles         : photos.map( ( p ) => p.file ),
+      videoUrl           : videoUrl ?? null,
+      loopVideoUrl       : loopVideoUrl ?? null,
+      countdownClipFiles : countdownClips.map( ( c ) => c.file ),
+    } )
+
+    if ( result.success ) {
+      setSyncStatus( 'done' )
+    } else {
+      setSyncStatus( 'error' )
+      setSyncError( result.error ?? 'Unknown error' )
+    }
+  }, [strip, photos, sessionId, frameKey, videoUrl, loopVideoUrl, countdownClips] )
+
+  // Auto-trigger sync once both video statuses have settled
+  useEffect( () => {
+    if ( syncStartedRef.current ) return
+    if ( !strip || photos.length === 0 ) return
+
+    // Wait until both video tasks have settled (ready / error / unavailable).
+    // 'idle' or 'loading' means work is still in-flight.
+    const videoSettled = videoStatus === 'ready' || videoStatus === 'error' || videoStatus === 'unavailable'
+    const loopSettled = loopStatus === 'ready' || loopStatus === 'error' || loopStatus === 'unavailable'
+    if ( !videoSettled || !loopSettled ) return
+
+    syncStartedRef.current = true
+    doSync()
+  }, [strip, photos, videoStatus, loopStatus, doSync] )
+
+  const retrySync = () => {
+    syncStartedRef.current = false
+    setSyncStatus( 'idle' )
+    setSyncError( null )
+    doSync()
+  }
+
   const retryVideo = () => {
     startedRef.current.video = false
     setVideoStatus( 'idle' )
@@ -150,6 +204,37 @@ export function StepResult() {
         <p className="max-w-md mx-auto text-sm text-muted-foreground lg:text-base">
           Download your photo strip, countdown mashup, or 15-second loop video below.
         </p>
+      </div>
+
+      {/* ── Upload status banner ──────────────────────────────── */}
+      <div className="flex items-center justify-center gap-2 mb-6">
+        {syncStatus === 'syncing' && (
+          <div className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-full bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
+            <Loader2 className="size-4 animate-spin" />
+            Uploading to server&hellip;
+          </div>
+        )}
+        {syncStatus === 'done' && (
+          <div className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-full bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">
+            <CheckCircle2 className="size-4" />
+            Uploaded to server
+          </div>
+        )}
+        {syncStatus === 'error' && (
+          <div className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-full bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-300">
+            <AlertCircle className="size-4" />
+            Upload failed{syncError ? `: ${syncError}` : ''}
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 px-2 ml-1 text-xs"
+              onClick={retrySync}
+            >
+              <RefreshCw className="mr-1 size-3" />
+              Retry
+            </Button>
+          </div>
+        )}
       </div>
 
       {/* ── Grid: Strip (hero) + Media cards ───────────────────── */}
@@ -481,6 +566,23 @@ export function StepResult() {
             <ImageDown className="mr-2 size-4" />
           )}
           Download all photos
+        </Button>
+        <Button size="lg"
+          variant="outline"
+          onClick={() => {
+            setSyncStatus( 'idle' )
+            setSyncError( null )
+            syncStartedRef.current = false
+            doSync()
+          }}
+          disabled={syncStatus === 'syncing'}
+        >
+          {syncStatus === 'syncing' ? (
+            <Loader2 className="mr-2 size-4 animate-spin" />
+          ) : (
+            <CloudUpload className="mr-2 size-4" />
+          )}
+          Upload to server
         </Button>
         <Button size="lg"
           variant="outline"

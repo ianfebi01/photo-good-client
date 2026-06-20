@@ -29,7 +29,7 @@ export const STEP_TIMEOUTS: Record<number, number> = {
   0 : 30,   // Select Frame — 30s idle
   1 : 120,  // Capture — 2min idle
   2 : 60,   // Filter — 60s idle
-  3 : 30,   // Result — 30s idle
+  3 : 60,   // Result — 60s idle
 };
 
 /** Show "Are you still there?" warning this many seconds before auto-reset. */

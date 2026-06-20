@@ -1,10 +1,9 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Loader2, RefreshCw, CheckCircle2, AlertCircle, QrCode } from 'lucide-react'
+import { useRouter } from 'next/navigation'
 
 import { Button } from '@/components/ui/button'
-import { BoothQR } from '@/components/booth/BoothQR'
 import { useBoothStore } from '@/store/boothStore'
 import {
   generateSessionVideo,
@@ -12,62 +11,9 @@ import {
   syncSessionToServer,
 } from '@/lib/photobooth/frames.query'
 
-type GenStatus = 'idle' | 'loading' | 'ready' | 'error' | 'unavailable'
-type SyncStatus = 'idle' | 'syncing' | 'done' | 'error'
-
-function isSettled( s: GenStatus ) {
-  return s === 'ready' || s === 'error' || s === 'unavailable'
-}
-
-// ── Sub-component: Sync status banner ─────────────────────────────
-
-function SyncStatusBanner( {
-  status,
-  error,
-  onRetry,
-}: {
-  status: SyncStatus
-  error: string | null
-  onRetry: () => void
-} ) {
-  if ( status === 'syncing' ) {
-    return (
-      <div className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-full bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
-        <Loader2 className="size-4 animate-spin" />
-        Uploading to server&hellip;
-      </div>
-    )
-  }
-
-  if ( status === 'done' ) {
-    return (
-      <div className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-full bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">
-        <CheckCircle2 className="size-4" />
-        Uploaded to server
-      </div>
-    )
-  }
-
-  if ( status === 'error' ) {
-    return (
-      <div className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-full bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-300">
-        <AlertCircle className="size-4" />
-        Upload failed{error ? `: ${error}` : ''}
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-6 px-2 ml-1 text-xs"
-          onClick={onRetry}
-        >
-          <RefreshCw className="mr-1 size-3" />
-          Retry
-        </Button>
-      </div>
-    )
-  }
-
-  return null
-}
+import { SyncStatusBanner, type SyncStatus } from '@/components/booth/SyncStatusBanner'
+import { VideoGenBadges, isSettled, type GenStatus } from '@/components/booth/VideoGenBadges'
+import { QRSection } from '@/components/booth/QRSection'
 
 // ── Main component ─────────────────────────────────────────────────
 
@@ -80,10 +26,14 @@ export function StepResult() {
     photos,
     sessionId,
     countdownClips,
+    timerEnabled,
+    timerSecondsLeft,
     reset,
     setVideoUrl,
     setLoopVideoUrl,
   } = useBoothStore()
+
+  const router = useRouter()
 
   // ── Derive initial statuses from persisted store values ─────────
   const [videoStatus, setVideoStatus] = useState<GenStatus>( () =>
@@ -208,6 +158,17 @@ export function StepResult() {
     doSync()
   }, [doSync] )
 
+  // ── Idle timer expiry → navigate home ───────────────────────────
+  // StepTimer counts down and calls reset() when it reaches 1.
+  // On the result step, we navigate to the homepage instead of
+  // just resetting back to the frame selector.
+  useEffect( () => {
+    if ( !timerEnabled || timerSecondsLeft === null ) return
+    if ( timerSecondsLeft <= 1 ) {
+      router.push( '/' )
+    }
+  }, [timerSecondsLeft, timerEnabled, router] )
+
   // ── Early return: no strip yet ──────────────────────────────────
   if ( !strip ) return null
 
@@ -225,43 +186,10 @@ export function StepResult() {
       </div>
 
       {/* ── Video generation status ──────────────────────────────── */}
-      <div className="flex flex-wrap items-center justify-center gap-3 mb-4">
-        {videoStatus === 'loading' && (
-          <span className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-full bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
-            <Loader2 className="size-3 animate-spin" />
-            Generating mashup video&hellip;
-          </span>
-        )}
-        {videoStatus === 'error' && (
-          <span className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-full bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-300">
-            <AlertCircle className="size-3" />
-            Mashup video failed
-          </span>
-        )}
-        {videoStatus === 'unavailable' && (
-          <span className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-full bg-gray-50 text-gray-500 dark:bg-gray-800 dark:text-gray-400">
-            Mashup unavailable
-          </span>
-        )}
-
-        {loopStatus === 'loading' && (
-          <span className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-full bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
-            <Loader2 className="size-3 animate-spin" />
-            Generating loop video&hellip;
-          </span>
-        )}
-        {loopStatus === 'error' && (
-          <span className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-full bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-300">
-            <AlertCircle className="size-3" />
-            Loop video failed
-          </span>
-        )}
-        {loopStatus === 'unavailable' && (
-          <span className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-full bg-gray-50 text-gray-500 dark:bg-gray-800 dark:text-gray-400">
-            Loop unavailable
-          </span>
-        )}
-      </div>
+      <VideoGenBadges
+        videoStatus={videoStatus}
+        loopStatus={loopStatus}
+      />
 
       {/* ── Upload status banner ─────────────────────────────────── */}
       <div className="flex items-center justify-center gap-2 mb-6">
@@ -287,31 +215,10 @@ export function StepResult() {
         )}
 
         {/* QR Code — always occupies its space to prevent layout shift */}
-        <div className="flex flex-col items-center gap-4">
-          {syncStatus === 'done' && resultSessionId ? (
-            <>
-              <BoothQR
-                page={`${process.env.NEXT_PUBLIC_BASE_URL || ''}/r/${resultSessionId}`}
-              />
-              <p className="text-sm text-muted-foreground text-center max-w-xs">
-                Scan to view &amp; download your photos on your phone
-              </p>
-            </>
-          ) : (
-            // Placeholder that mirrors BoothQR dimensions exactly —
-            // prevents layout shift when the real QR renders in.
-            <div className="flex flex-col items-center gap-3 p-4">
-              <div className="flex items-center gap-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                <QrCode className="size-4" />
-                Scan to open on phone
-              </div>
-              <div className="relative size-50 rounded-xl border bg-secondary/50 shadow-sm flex items-center justify-center">
-                <Loader2 className="size-8 animate-spin text-muted-foreground/60" />
-              </div>
-              <span className="text-xs text-muted-foreground h-8" />
-            </div>
-          )}
-        </div>
+        <QRSection
+          syncStatus={syncStatus}
+          resultSessionId={resultSessionId}
+        />
       </div>
 
       {/* ── Bottom actions ────────────────────────────────────────── */}

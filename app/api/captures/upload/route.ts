@@ -63,7 +63,7 @@ export async function POST( request: Request ) {
       const name = `countdown-${sessionId}-${index}.webm`;
       await writeFile( path.join( CAPTURES_DIR, name ), buffer );
 
-      return Response.json( { file : name, url : `/api/captures/${name}` } );
+      return Response.json( { file : name, url : `/captures/${name}` } );
     }
 
     // Photo — save the main shot and an immutable raw copy
@@ -71,7 +71,7 @@ export async function POST( request: Request ) {
     await writeFile( path.join( CAPTURES_DIR, name ), buffer );
     await saveRawCopy( sessionId, index, buffer );
 
-    return Response.json( { file : name, url : `/api/captures/${name}` } );
+    return Response.json( { file : name, url : `/captures/${name}` } );
   } catch ( err ) {
     return Response.json(
       { error : err instanceof Error ? err.message : "Upload failed" },

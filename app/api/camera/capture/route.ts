@@ -39,7 +39,7 @@ export async function POST( request: Request ) {
     // Preserve an immutable raw copy
     await saveRawCopy( sessionId, index, jpeg );
 
-    return Response.json( { file : name, url : `/api/captures/${name}` } );
+    return Response.json( { file : name, url : `/captures/${name}` } );
   } catch ( err ) {
     return Response.json(
       { error : err instanceof Error ? err.message : "Capture failed" },

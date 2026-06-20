@@ -72,7 +72,7 @@ export function StepResult() {
     try {
       const result = await convertCountdownClip( { file } )
       // Fall back to the raw webm if ffmpeg isn't available server-side.
-      const url = result?.url ?? `/api/captures/${file}`
+      const url = result?.url ?? `/captures/${file}`
       const ext = result ? 'mp4' : 'webm'
       const a = document.createElement( 'a' )
       a.href = url

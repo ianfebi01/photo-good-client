@@ -1,0 +1,88 @@
+name: Build and Deploy
+
+on:
+  # push:
+  #   branches:
+  #     - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Set up SSH key
+        run: |
+          echo "${{ secrets.VPS_SSH_KEY }}" > private_key.pem
+          chmod 600 private_key.pem
+
+      - name: Debug SSH Connection
+        run: ssh -vvv -o StrictHostKeyChecking=no -i private_key.pem ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}
+
+      - name: Check if private key exists
+        run: ls -lah private_key.pem
+
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v2
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          push: true
+          tags: ghcr.io/ianfebi01/photo-good:latest
+          build-args: |
+            NEXT_PUBLIC_GOOGLE_ANALYTICS=${{ secrets.NEXT_PUBLIC_GOOGLE_ANALYTICS }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: List contents before SCP
+        run: ls -lah
+
+      - name: Upload app image & configs to VPS
+        uses: appleboy/scp-action@v0.1.4
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: 22
+          source: "docker-compose.yml"
+          target: /tmp/photo-good
+          strip_components: 0
+          rm: false
+          debug: true
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: SSH into VPS and deploy
+        uses: appleboy/ssh-action@v0.1.10
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            echo "${{ secrets.GH_PAT }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            cd /tmp/photo-good
+            mkdir -p ~/app/photo-good
+            cp docker-compose.yml ~/app/photo-good/docker-compose.yml
+            cd ~/app/photo-good
+            docker compose --env-file .env.production pull
+            docker compose --env-file .env.production down --remove-orphans
+            docker compose --env-file .env.production up -d --remove-orphans --force-recreate
+            rm -rf /tmp/photo-good

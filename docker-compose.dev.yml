@@ -1,0 +1,30 @@
+services:
+  database:
+    image: postgres:16
+    environment:
+      PGDATA: /var/lib/postgresql/data/pgdata
+      DATABASE_HOST: database
+      POSTGRES_DB: ${POSTGRES_DATABASE:-photo_good_dev}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    # Only uncomment this to expose the database for direct access
+    ports:
+      - 5431:5432
+    networks:
+      - database
+    restart: unless-stopped
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1G
+
+networks:
+  database:
+    driver: bridge
+
+volumes:
+  db_data:
+    driver: local

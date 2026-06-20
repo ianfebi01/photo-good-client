@@ -1,0 +1,22 @@
+# Lightweight image that seeds built-in frames into R2 + Postgres.
+# Built in CI and run on the VPS via `docker run` — nothing is built on the VPS.
+# It carries only what scripts/seed-frames.ts needs: tsx + a few pure-JS deps
+# and the PNGs. No next/react/sharp, so there is no native compilation.
+FROM node:alpine3.17
+
+WORKDIR /usr/app
+
+# Only the deps the seeder imports — kept in sync with package.json where it matters.
+# Uses npm (bundled with node) to avoid corepack/pnpm version clashes in CI.
+RUN npm init -y \
+ && npm install \
+      tsx@4.22.4 \
+      pg@8 \
+      @aws-sdk/client-s3@3 \
+      dotenv@16
+
+# Seeder + the PNGs it uploads (read from public/frames at runtime).
+COPY scripts ./scripts
+COPY public/frames ./public/frames
+
+ENTRYPOINT ["npx", "tsx", "scripts/seed-frames.ts"]

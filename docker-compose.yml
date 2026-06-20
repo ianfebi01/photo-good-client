@@ -1,0 +1,44 @@
+services:
+  photo-good:
+    restart: always
+    build: .
+    image: ghcr.io/ianfebi01/photo-good:latest
+    container_name: photo-good
+    # ports:
+    #   - 3000:3000
+    networks:
+      - proxy
+      - database
+    env_file:
+      - .env.production
+    environment:
+      HOSTNAME: 0.0.0.0
+      PORT: 3000
+  database:
+    image: postgres:16
+    environment:
+      PGDATA: /var/lib/postgresql/data/pgdata
+      DATABASE_HOST: database
+      POSTGRES_DB: ${POSTGRES_DATABASE}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    env_file:
+      - .env.production
+    # Only uncomment this to expose the database for direct access
+    # ports:
+    #   - 5431:5432
+    networks:
+      - proxy
+      - database
+    restart: unless-stopped
+    volumes:
+      - db_data:/var/lib/postgresql/data
+networks:
+  proxy:
+    external: true
+  database:
+    driver: bridge
+
+volumes:
+  db_data:
+    driver: local

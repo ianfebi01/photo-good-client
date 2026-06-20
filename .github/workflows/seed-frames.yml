@@ -1,0 +1,62 @@
+name: Seed Frames
+
+# Manual-only: trigger from the GitHub UI →
+# Actions → "Seed Frames" → "Run workflow".
+on:
+  workflow_dispatch:
+
+jobs:
+  build-seed:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v2
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Build and push seed image
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          file: Dockerfile.seed
+          push: true
+          tags: ghcr.io/ianfebi01/photo-good-seed:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  run-seed:
+    needs: build-seed
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: SSH into VPS and run the seeder
+        uses: appleboy/ssh-action@v0.1.10
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            set -e
+            echo "${{ secrets.GH_PAT }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            cd ~/app/photo-good
+            docker pull ghcr.io/ianfebi01/photo-good-seed:latest
+            # Resolve the DB's docker network so the seeder can reach `database`.
+            DB_NET=$(docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{println $k}}{{end}}' photo-good-database-1 | grep -m1 database)
+            echo "Using network: $DB_NET"
+            docker run --rm \
+              --network "$DB_NET" \
+              --env-file .env.production \
+              ghcr.io/ianfebi01/photo-good-seed:latest
+            docker image prune -f

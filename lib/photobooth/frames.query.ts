@@ -24,13 +24,13 @@ async function parseJson<T>( response: Response, fallbackMessage: string ): Prom
     const message = data?.error ?? fallbackMessage
     throw new Error( message )
   }
-  
+
   return data as T
 }
 
 export async function getFrames( { page, limit }: PageArg ): Promise<FramesResponse> {
   const response = await fetch( `/api/frames?page=${page}&limit=${limit}`, { cache : 'no-store' } )
-  
+
   return parseJson<FramesResponse>( response, 'Failed to load frames' )
 }
 
@@ -38,7 +38,7 @@ export async function getFrames( { page, limit }: PageArg ): Promise<FramesRespo
 export async function getAllFrames(): Promise<FramesResponse> {
   const response = await fetch( '/api/frames?page=1&limit=200', { cache : 'no-store' } )
   const data = await parseJson<FramesResponse>( response, 'Failed to load frames' )
-  
+
   return data
 }
 
@@ -316,65 +316,9 @@ export async function convertCountdownClip( {
   return parseJson( response, 'MP4 conversion failed' )
 }
 
-// ── Direct client upload to external server ──────────────────────────
-
-const EXTERNAL_BASE = process.env.NEXT_PUBLIC_BASE_URL || ''
-const BOOTH_API_KEY = process.env.NEXT_PUBLIC_BOOTH_API_KEY || ''
+// ── Server-proxied session sync (API key stays server-side) ─────────
 
 type MediaType = import( '@/types/booth' ).BoothMediaType
-
-/** Build a full external API URL from a relative path. */
-function externalUrl( path: string ): string {
-  return `${EXTERNAL_BASE.replace( /\/$/, '' )}/${path.replace( /^\//, '' )}`
-}
-
-/** Fetch helper that attaches the booth API key. */
-function authedFetch( url: string, init?: RequestInit ): Promise<Response> {
-  const headers = new Headers( init?.headers )
-  if ( BOOTH_API_KEY && !headers.has( 'Authorization' ) ) {
-    headers.set( 'Authorization', `Bearer ${BOOTH_API_KEY}` )
-  }
-
-  return fetch( url, { ...init, headers } )
-}
-
-/** Infer MIME type from filename extension. */
-function mimeFromName( name: string ): string {
-  if ( name.endsWith( '.mp4' ) ) return 'video/mp4'
-  if ( name.endsWith( '.webm' ) ) return 'video/webm'
-  if ( name.endsWith( '.gif' ) ) return 'image/gif'
-  if ( name.endsWith( '.png' ) ) return 'image/png'
-
-  return 'image/jpeg'
-}
-
-/**
- * Upload a single file from a local /captures/ URL to the external
- * server's media endpoint. Returns the media ID on success.
- */
-async function uploadMedia( filename: string ): Promise<string | null> {
-  // Fetch the file blob from the local Next.js static server
-  const localUrl = `/captures/${filename}`
-  const fileRes = await fetch( localUrl )
-  if ( !fileRes.ok ) return null
-
-  const blob = await fileRes.blob()
-  const typedBlob = new Blob( [blob], { type : mimeFromName( filename ) } )
-
-  const formData = new FormData()
-  formData.append( 'file', typedBlob, filename )
-
-  const mediaRes = await authedFetch( externalUrl( '/api/booth/media' ), {
-    method : 'POST',
-    body   : formData,
-  } )
-
-  if ( !mediaRes.ok ) return null
-
-  const data = await mediaRes.json()
-
-  return data.id || data.mediaId || data.media_id || data.media?.id || data.media?.media_id || null
-}
 
 /** Extract a filename from a URL like `/captures/strip-abc.jpg?v=123`. */
 function filenameFromUrl( url: string ): string | null {
@@ -382,13 +326,9 @@ function filenameFromUrl( url: string ): string | null {
 }
 
 /**
- * Upload all session media directly from the browser to the external
- * server, then create a result record linking them all.
- *
- * Flow:
- * 1. Fetch each file blob from /captures/{filename}
- * 2. POST each blob to external /api/booth/media → get mediaId
- * 3. POST all mediaIds to external /api/booth/results
+ * Sync all session media to the external server via the server-side proxy.
+ * The API key never leaves the server — the client sends only filenames,
+ * and the server reads files from disk and uploads them to the external API.
  */
 export async function syncSessionToServer( {
   sessionId,
@@ -407,71 +347,50 @@ export async function syncSessionToServer( {
   loopVideoUrl: string | null
   countdownClipFiles: string[]
 } ): Promise<{ success: boolean; sessionId?: string; error?: string }> {
-  if ( !EXTERNAL_BASE ) {
-    return { success : false, error : 'NEXT_PUBLIC_BASE_URL is not configured' }
-  }
-
   // Collect all items to upload: [filename, type]
-  const pending: Array<{ filename: string; type: MediaType }> = []
+  const items: Array<{ filename: string; type: MediaType }> = []
 
   if ( stripUrl ) {
     const f = filenameFromUrl( stripUrl )
-    if ( f ) pending.push( { filename : f, type : 'strip' } )
+    if ( f ) items.push( { filename : f, type : 'strip' } )
   }
 
   for ( const file of photoFiles ) {
-    pending.push( { filename : file, type : 'image' } )
+    items.push( { filename : file, type : 'image' } )
   }
 
   if ( videoUrl ) {
     const f = filenameFromUrl( videoUrl )
-    if ( f ) pending.push( { filename : f, type : 'mashup' } )
+    if ( f ) items.push( { filename : f, type : 'mashup' } )
   }
 
   if ( loopVideoUrl ) {
     const f = filenameFromUrl( loopVideoUrl )
-    if ( f ) pending.push( { filename : f, type : 'loop' } )
+    if ( f ) items.push( { filename : f, type : 'loop' } )
   }
 
   for ( const file of countdownClipFiles ) {
-    pending.push( { filename : file, type : 'countdown' } )
+    items.push( { filename : file, type : 'countdown' } )
   }
 
-  if ( pending.length === 0 ) {
+  if ( items.length === 0 ) {
     return { success : false, error : 'No media to upload' }
   }
 
   try {
-    // Step 1: Upload each file and collect media IDs
-    const items: Array<{ mediaId: string; type: MediaType }> = []
-
-    for ( const { filename, type } of pending ) {
-      const mediaId = await uploadMedia( filename )
-      if ( mediaId ) {
-        items.push( { mediaId, type } )
-      }
-    }
-
-    if ( items.length === 0 ) {
-      return { success : false, error : 'All media uploads failed' }
-    }
-
-    // Step 2: Create the result record
-    const resultRes = await authedFetch( externalUrl( '/api/booth/results' ), {
+    const res = await fetch( '/api/booth/sync', {
       method  : 'POST',
       headers : { 'Content-Type' : 'application/json' },
       body    : JSON.stringify( { sessionId, frameKey, items } ),
     } )
 
-    if ( !resultRes.ok ) {
-      const errData = await resultRes.text().catch( () => '' )
+    const data = await res.json().catch( () => ( {} ) )
 
-      return { success : false, error : `Result creation failed: ${errData}` }
+    if ( !res.ok ) {
+      return { success : false, error : ( data as { error?: string } ).error ?? 'Upload failed' }
     }
 
-    const resultData = await resultRes.json().catch( () => ( {} ) )
-
-    return { success : true, sessionId : resultData.sessionId || sessionId }
+    return { success : true, sessionId : ( data as { sessionId?: string } ).sessionId || sessionId }
   } catch ( err ) {
     return {
       success : false,

@@ -3,7 +3,7 @@ import { fetchBoothFrames } from "@/lib/photobooth/frames.query.server";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/** Return a paginated frame catalog from the external API. */
+/** Proxy: fetch frame catalog from the external booth API (keeps BOOTH_API_KEY server-side). */
 export async function GET( request: Request ) {
   const { searchParams } = new URL( request.url );
   const page = Math.max( 1, Number( searchParams.get( "page" ) ) || 1 );

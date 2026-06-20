@@ -35,9 +35,19 @@ export const STEP_TIMEOUTS: Record<number, number> = {
 /** Show "Are you still there?" warning this many seconds before auto-reset. */
 export const TIMEOUT_WARNING_SECONDS = 5;
 
+/** Timeout for individual capture requests (ms). */
+const CAPTURE_TIMEOUT_MS = 30_000;
+
 const newId = () => Math.random().toString( 36 ).slice( 2, 10 );
 
-// Module-level lock — avoids re-render on every capture tick
+/** Extract a human-readable message from any thrown value. */
+function errorMessage( err: unknown, fallback: string ): string {
+  return err instanceof Error ? err.message : fallback;
+}
+
+// Module-level lock — avoids triggering re-renders on every capture tick.
+// Zustand state changes would cause component tree re-renders; this
+// module-scoped variable is invisible to React.
 let _capturing = false;
 
 export interface BoothState {
@@ -93,51 +103,71 @@ export interface BoothState {
   resetTimer: () => void;
 }
 
+// ── Helpers ───────────────────────────────────────────────────────
+
+/** Fields that are cleared when a session resets or a new frame is selected. */
+function freshSessionState(): Partial<BoothState> {
+  return {
+    started        : false,
+    sessionId      : "",
+    phase          : "idle",
+    photos         : [],
+    pending        : null,
+    strip          : null,
+    gifUrl         : null,
+    videoUrl       : null,
+    loopVideoUrl   : null,
+    countdownClips : [],
+    error          : null,
+    step           : 0,
+  };
+}
+
+// ── Store ─────────────────────────────────────────────────────────
+
 export const useBoothStore = create<BoothState>()(
   persist(
     ( set, get ) => ( {
       // ── Initial state ──────────────────────────────
-      started        : false,
-      frameKey       : DEFAULT_FRAME_KEY,
-      sessionId      : "",
-      photos         : [],
-      strip          : null,
-      gifUrl         : null,
-      videoUrl       : null,
-      loopVideoUrl   : null,
-      countdownClips : [],
-      phase          : "idle",
-      pending        : null,
-      flash          : false,
-      streamKey      : "live",
-      error          : null,
-      uploadOpen     : false,
-      frames         : FALLBACK_FRAMES,
-      status         : null,
-      step           : 0,
-
-      // Timer
+      started          : false,
+      frameKey         : DEFAULT_FRAME_KEY,
+      sessionId        : "",
+      photos           : [],
+      strip            : null,
+      gifUrl           : null,
+      videoUrl         : null,
+      loopVideoUrl     : null,
+      countdownClips   : [],
+      phase            : "idle",
+      pending          : null,
+      flash            : false,
+      streamKey        : "live",
+      error            : null,
+      uploadOpen       : false,
+      frames           : FALLBACK_FRAMES,
+      status           : null,
+      step             : 0,
       timerEnabled     : true,
       timerSecondsLeft : null,
 
       // ── Setters ────────────────────────────────────
       setStatus : ( status ) => set( { status } ),
+
       setFrames : ( frames ) => {
         const currentKey = get().frameKey;
-        const keyExists = frames.some( f => f.key === currentKey );
-        set( { 
-          frames, 
-          frameKey : keyExists ? currentKey : ( frames[0]?.key ?? "" ) 
+        const keyExists = frames.some( ( f ) => f.key === currentKey );
+        set( {
+          frames,
+          frameKey : keyExists ? currentKey : ( frames[0]?.key ?? "" ),
         } );
       },
+
       setUploadOpen : ( uploadOpen ) => set( { uploadOpen } ),
 
       restartPreview : () => set( { streamKey : newId() } ),
 
-      // ── Begin capture session ──────────────────────
-      start : () => set( { started : true, step : 1 } ),
-
-      // ── Move to filter step ────────────────────────
+      // ── Navigation ─────────────────────────────────
+      start      : () => set( { started : true, step : 1 } ),
       goToFilter : () => set( { step : 2 } ),
 
       // ── Frame selection ────────────────────────────
@@ -145,53 +175,30 @@ export const useBoothStore = create<BoothState>()(
         if ( key === get().frameKey ) return;
         _capturing = false;
         set( {
-          frameKey       : key,
-          started        : false,
-          sessionId      : "",
-          phase          : "idle",
-          photos         : [],
-          pending        : null,
-          strip          : null,
-          gifUrl         : null,
-          videoUrl       : null,
-          loopVideoUrl   : null,
-          countdownClips : [],
-          error          : null,
-          step           : 0,
+          ...freshSessionState(),
+          frameKey  : key,
+          streamKey : newId(),
         } );
-        get().restartPreview();
       },
 
       // ── Session reset ──────────────────────────────
       reset : () => {
         _capturing = false;
-        const frames = get().frames;
+        const { frames } = get();
         set( {
-          started          : false,
-          sessionId        : "",
-          phase            : "idle",
-          photos           : [],
-          pending          : null,
-          strip            : null,
-          gifUrl           : null,
-          videoUrl         : null,
-          loopVideoUrl     : null,
-          countdownClips   : [],
-          error            : null,
-          flash            : false,
-          step             : 0,
+          ...freshSessionState(),
           frameKey         : frames[0]?.key ?? DEFAULT_FRAME_KEY,
+          flash            : false,
+          streamKey        : newId(),
           timerSecondsLeft : null,
         } );
-        get().restartPreview();
       },
 
       // ── Retake a pending shot ──────────────────────
       retakePending : () => {
         const { phase, pending } = get();
         if ( phase !== "reviewing" || !pending ) return;
-        set( { pending : null, phase : "idle" } );
-        get().restartPreview();
+        set( { pending : null, phase : "idle", streamKey : newId() } );
       },
 
       // ── Add an uploaded frame ──────────────────────
@@ -215,7 +222,7 @@ export const useBoothStore = create<BoothState>()(
         _capturing = true;
 
         const controller = new AbortController();
-        const timeout = setTimeout( () => controller.abort(), 30_000 );
+        const timeout = setTimeout( () => controller.abort(), CAPTURE_TIMEOUT_MS );
 
         set( { error : null, phase : "running" } );
         try {
@@ -231,9 +238,9 @@ export const useBoothStore = create<BoothState>()(
             phase   : "reviewing",
           } );
         } catch ( err ) {
-          const message = err instanceof Error
-            ? ( err.name === "AbortError" ? "Capture timed out" : err.message )
-            : "Something went wrong";
+          const message = err instanceof Error && err.name === "AbortError"
+            ? "Capture timed out"
+            : errorMessage( err, "Something went wrong" );
           set( { error : message, phase : "error" } );
           get().restartPreview();
         } finally {
@@ -254,7 +261,7 @@ export const useBoothStore = create<BoothState>()(
         try {
           const frame = frames.find( ( f ) => f.key === frameKey ) ?? frames[0];
           const photoCount = frame?.photoCount ?? 0;
-          
+
           const nextPhotos = [...photos];
           if ( replaceIndex !== undefined && replaceIndex < photos.length ) {
             nextPhotos[replaceIndex] = pending;
@@ -266,12 +273,11 @@ export const useBoothStore = create<BoothState>()(
           if ( nextPhotos.length >= photoCount ) {
             set( { phase : "adjusting" } );
           } else {
-            set( { phase : "idle" } );
-            get().restartPreview();
+            set( { phase : "idle", streamKey : newId() } );
           }
         } catch ( err ) {
           set( {
-            error : err instanceof Error ? err.message : "Accept failed",
+            error : errorMessage( err, "Accept failed" ),
             phase : "error",
           } );
           get().restartPreview();
@@ -292,10 +298,15 @@ export const useBoothStore = create<BoothState>()(
             files     : photos.map( ( s ) => s.file ),
             adjustments,
           } );
-          set( { strip : composed.url, phase : "done", step : 3 } );
+          set( {
+            strip     : composed.url,
+            phase     : "done",
+            step      : 3,
+            sessionId : activeSession,
+          } );
         } catch ( err ) {
           set( {
-            error : err instanceof Error ? err.message : "Compose failed",
+            error : errorMessage( err, "Compose failed" ),
             phase : "error",
           } );
         }
@@ -317,7 +328,7 @@ export const useBoothStore = create<BoothState>()(
       setTimerEnabled     : ( enabled ) => set( { timerEnabled : enabled } ),
       setTimerSecondsLeft : ( seconds ) => set( { timerSecondsLeft : seconds } ),
       resetTimer          : () => {
-        const step = get().step;
+        const { step } = get();
         const timeout = STEP_TIMEOUTS[step] ?? 30;
         set( { timerSecondsLeft : timeout } );
       },

@@ -33,7 +33,6 @@ export function usePaymentPolling( orderId: string | null ): PollResult {
       try {
         const res = await fetch(
           `/api/booth/payment/status?orderId=${orderId}`,
-          { headers : { 'x-booth-key' : process.env.NEXT_PUBLIC_BOOTH_API_KEY || '' } },
         )
         const data = await res.json()
         if ( !alive || !res.ok ) return

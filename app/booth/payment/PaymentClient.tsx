@@ -178,11 +178,8 @@ export function PaymentClient() {
     try {
       const res = await fetch( '/api/booth/payment/charge', {
         method  : 'POST',
-        headers : {
-          'Content-Type' : 'application/json',
-          'x-booth-key'  : process.env.NEXT_PUBLIC_BOOTH_API_KEY || '',
-        },
-        body : JSON.stringify( { sessionId : paySessionId } ),
+        headers : { 'Content-Type' : 'application/json' },
+        body    : JSON.stringify( { sessionId : paySessionId } ),
       } )
       const data = await res.json()
 

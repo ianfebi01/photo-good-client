@@ -45,7 +45,7 @@ export function StepTimer() {
       if ( current <= 1 ) {
         // Time's up — auto-reset and go to payment
         reset()
-        router.push( '/booth/payment' )
+        router.replace( '/booth/payment' )
       } else {
         setTimerSecondsLeft( current - 1 )
       }

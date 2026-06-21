@@ -163,7 +163,7 @@ export function PaymentClient() {
     if ( phase === 'settled' && countdown === 0 ) {
       dispatch( { type : 'PAID' } )
       setPayment( { paymentStatus : 'paid' } )
-      router.push( '/booth' )
+      router.replace( '/booth' )
     }
   }, [phase, countdown, router, setPayment] )
 

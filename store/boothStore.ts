@@ -79,6 +79,7 @@ export interface BoothState {
   paymentOrderId: string | null;
   paymentQrCodeUrl: string | null;
   paymentDeeplinkUrl: string | null;
+  resultSynced: boolean;
 
   // ── Timer ──────────────────────────────────────────
   /** Whether the step idle timer is enabled (e.g., kiosk mode). */
@@ -161,6 +162,7 @@ export const useBoothStore = create<BoothState>()(
       paymentOrderId     : null,
       paymentQrCodeUrl   : null,
       paymentDeeplinkUrl : null,
+      resultSynced       : false,
 
       // ── Setters ────────────────────────────────────
       setStatus : ( status ) => set( { status } ),
@@ -208,6 +210,7 @@ export const useBoothStore = create<BoothState>()(
           paymentOrderId     : null,
           paymentQrCodeUrl   : null,
           paymentDeeplinkUrl : null,
+          resultSynced       : false,
         } );
       },
 
@@ -373,6 +376,7 @@ export const useBoothStore = create<BoothState>()(
         paymentOrderId     : state.paymentOrderId,
         paymentQrCodeUrl   : state.paymentQrCodeUrl,
         paymentDeeplinkUrl : state.paymentDeeplinkUrl,
+        resultSynced       : state.resultSynced,
       } ),
     },
   ),

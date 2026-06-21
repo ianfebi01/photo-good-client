@@ -28,6 +28,7 @@ export function StepResult() {
     countdownClips,
     timerEnabled,
     timerSecondsLeft,
+    resultSynced,
     reset,
     setVideoUrl,
     setLoopVideoUrl,
@@ -111,9 +112,13 @@ export function StepResult() {
   ] )
 
   // ── Server sync ─────────────────────────────────────────────────
-  const [syncStatus, setSyncStatus] = useState<SyncStatus>( 'idle' )
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>(
+    resultSynced ? 'done' : 'idle',
+  )
   const [syncError, setSyncError] = useState<string | null>( null )
-  const [resultSessionId, setResultSessionId] = useState<string | null>( null )
+  const [resultSessionId, setResultSessionId] = useState<string | null>(
+    resultSynced ? sessionId : null,
+  )
 
   const doSync = useCallback( async () => {
     if ( !strip || photos.length === 0 ) return
@@ -134,6 +139,7 @@ export function StepResult() {
     if ( result.success ) {
       setSyncStatus( 'done' )
       setResultSessionId( result.sessionId ?? sessionId )
+      useBoothStore.setState( { resultSynced : true } )
     } else {
       setSyncStatus( 'error' )
       setSyncError( result.error ?? 'Unknown error' )
@@ -141,16 +147,16 @@ export function StepResult() {
   }, [strip, photos, sessionId, frameKey, videoUrl, loopVideoUrl, countdownClips] )
 
   // Auto-trigger sync once both video statuses have settled.
-  // Only fires once per session — manual retry calls doSync() directly.
+  // Persisted `resultSynced` prevents re-syncing on page refresh.
   useEffect( () => {
-    if ( syncAttemptedRef.current ) return
+    if ( syncAttemptedRef.current || resultSynced ) return
     if ( !strip || photos.length === 0 ) return
     if ( !isSettled( videoStatus ) || !isSettled( loopStatus ) ) return
 
     syncAttemptedRef.current = true
     // eslint-disable-next-line react-hooks/set-state-in-effect
     doSync()
-  }, [strip, photos, videoStatus, loopStatus, doSync] )
+  }, [strip, photos, videoStatus, loopStatus, resultSynced, doSync] )
 
   // Manual retry — calls doSync directly without waiting for the
   // auto-trigger effect (avoids double-fire).

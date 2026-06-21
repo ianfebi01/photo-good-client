@@ -82,6 +82,11 @@ function usePaymentPolling( orderId: string | null ): PollResult {
 function resolveInitialPhase(): { phase: Phase; charge: Charge | null } {
   const s = useBoothStore.getState()
 
+  // Payment already completed — block re-entry to this page.
+  if ( s.paymentStatus === 'paid' ) {
+    return { phase : 'paid', charge : null }
+  }
+
   if ( s.paymentOrderId && s.paymentQrCodeUrl ) {
     return {
       phase  : 'pending',
@@ -185,6 +190,13 @@ export function PaymentClient() {
     }
   }, [pollResult, setPayment] )
 
+  // ── Redirect immediately if re-entering after payment ─────────────
+  useEffect( () => {
+    if ( initial.phase === 'paid' ) {
+      router.replace( '/booth' )
+    }
+  }, [initial.phase, router] )
+
   // ── Countdown after paid, then navigate to /booth ────────────────
   useEffect( () => {
     if ( phase !== 'paid' ) return
@@ -222,6 +234,12 @@ export function PaymentClient() {
   }, [createCharge] )
 
   // ── Render ───────────────────────────────────────────────────────
+
+  // Block re-entry when payment is already completed — render nothing
+  // while the redirect fires (avoids flickering the countdown UI).
+  if ( initial.phase === 'paid' ) {
+    return null
+  }
 
   if ( phase === 'idle' ) {
     return (

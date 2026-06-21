@@ -1,4 +1,3 @@
-import { dehydrate, HydrationBoundary, QueryClient } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
 import LogoCard from '@/components/LogoCard'
 import PhotoStack from '@/components/PhotoStack'
@@ -7,19 +6,11 @@ import PhotoboothCard from '@/components/PhotoboothCard'
 import QuoteCard from '@/components/QuoteCard'
 import AppCard from '@/components/AppCard'
 import Link from 'next/link'
-import { FRAMES_QUERY_KEY } from '@/lib/photobooth/frames.query'
-import { getFramesForSsr } from '@/lib/photobooth/frames.query.server'
 import { FrameSyncTrigger } from '@/components/FrameSyncTrigger'
 
-export default async function Home() {
-  const queryClient = new QueryClient()
-  await queryClient.prefetchQuery( {
-    queryKey : [...FRAMES_QUERY_KEY, { page : 1, limit : 5 }],
-    queryFn  : () => getFramesForSsr( { page : 1, limit : 5 } ),
-  } )
-
+export default function Home() {
   return (
-    <HydrationBoundary state={dehydrate( queryClient )}>
+    <>
       <FrameSyncTrigger />
       <main className="min-h-screen lg:min-h-[unset] lg:h-screen bg-white">
         <div className="container px-4 py-8 mx-auto lg:py-16 lg:h-full">
@@ -88,6 +79,6 @@ export default async function Home() {
 
         </div>
       </main>
-    </HydrationBoundary>
+    </>
   )
 }

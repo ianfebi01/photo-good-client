@@ -184,7 +184,7 @@ export function StepResult() {
   if ( !strip ) return null
 
   return (
-    <div className="container px-4 py-8 mx-auto overflow-auto lg:py-12 grow scrollbar-none">
+    <div className="container px-4 py-8 mx-auto overflow-auto lg:py-12 grow scrollbar-none lg:flex lg:flex-col lg:justify-center">
       {/* ── Header ───────────────────────────────────────────────── */}
       <div className="mb-10 space-y-2 text-center">
         <h2 className="text-3xl font-bold tracking-tight lg:text-4xl text-foreground">
@@ -195,52 +195,53 @@ export function StepResult() {
           video below.
         </p>
       </div>
-
-      {/* ── Video generation status ──────────────────────────────── */}
-      <VideoGenBadges
-        videoStatus={videoStatus}
-        loopStatus={loopStatus}
-      />
-
-      {/* ── Upload status banner ─────────────────────────────────── */}
-      <div className="flex items-center justify-center gap-2 mb-6">
-        <SyncStatusBanner
-          status={syncStatus}
-          error={syncError}
-          onRetry={retrySync}
+      <div className=''>
+        {/* ── Video generation status ──────────────────────────────── */}
+        <VideoGenBadges
+          videoStatus={videoStatus}
+          loopStatus={loopStatus}
         />
-      </div>
 
-      {/* ── QR Code + Strip preview ──────────────────────────────── */}
-      <div className="flex flex-col items-center gap-8 lg:flex-row lg:justify-center lg:items-start">
-        {/* Strip preview */}
-        {strip && (
-          <div className="w-full max-w-xs">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={strip}
-              alt="Composed photo strip"
-              className="w-full border rounded-xl shadow-md"
-            />
-          </div>
-        )}
+        {/* ── Upload status banner ─────────────────────────────────── */}
+        <div className="flex items-center justify-center gap-2 mb-6">
+          <SyncStatusBanner
+            status={syncStatus}
+            error={syncError}
+            onRetry={retrySync}
+          />
+        </div>
 
-        {/* QR Code — always occupies its space to prevent layout shift */}
-        <QRSection
-          syncStatus={syncStatus}
-          resultSessionId={resultSessionId}
-        />
-      </div>
+        {/* ── QR Code + Strip preview ──────────────────────────────── */}
+        <div className="flex flex-col items-center gap-8 lg:flex-row lg:justify-center lg:items-center">
+          {/* Strip preview */}
+          {strip && (
+            <div className="w-full max-w-xs">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={strip}
+                alt="Composed photo strip"
+                className="w-full border rounded-xl shadow-md"
+              />
+            </div>
+          )}
 
-      {/* ── Bottom actions ────────────────────────────────────────── */}
-      <div className="flex justify-center gap-3 mt-10">
-        <Button
-          size="lg"
-          variant="outline"
-          onClick={resetSession}
-        >
+          {/* QR Code — always occupies its space to prevent layout shift */}
+          <QRSection
+            syncStatus={syncStatus}
+            resultSessionId={resultSessionId}
+          />
+        </div>
+
+        {/* ── Bottom actions ────────────────────────────────────────── */}
+        <div className="flex justify-center gap-3 mt-10">
+          <Button
+            size="lg"
+            variant="outline"
+            onClick={resetSession}
+          >
           Start new session
-        </Button>
+          </Button>
+        </div>
       </div>
     </div>
   )

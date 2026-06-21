@@ -9,7 +9,7 @@ import { useBoothStore } from '@/store/boothStore'
 
 // ── Types ──────────────────────────────────────────────────────────
 
-type Phase = 'idle' | 'creating' | 'pending' | 'paid' | 'expired' | 'error'
+type Phase = 'loading' | 'idle' | 'creating' | 'pending' | 'paid' | 'expired' | 'error'
 
 type Charge = {
   orderId: string
@@ -78,7 +78,7 @@ function usePaymentPolling( orderId: string | null ): PollResult {
 
 // ── Helpers ────────────────────────────────────────────────────────
 
-/** Determine the initial phase from the persisted store state. */
+/** Determine the resolved phase from the persisted store state. */
 function resolveInitialPhase(): { phase: Phase; charge: Charge | null } {
   const s = useBoothStore.getState()
 
@@ -108,11 +108,23 @@ export function PaymentClient() {
   const router = useRouter()
   const { sessionId, setPayment } = useBoothStore()
 
-  const [initial] = useState( resolveInitialPhase )
-  const [phase, setPhase] = useState<Phase>( initial.phase )
-  const [charge, setCharge] = useState<Charge | null>( initial.charge )
+  // Start in 'loading' — we don't trust synchronous store reads on first
+  // paint because persisted (e.g. Zustand `persist`) state may not have
+  // rehydrated from localStorage yet. Resolving in an effect (below)
+  // guarantees we only render the real phase once hydration is done,
+  // which removes the idle/pending flash on reload.
+  const [phase, setPhase] = useState<Phase>( 'loading' )
+  const [charge, setCharge] = useState<Charge | null>( null )
   const [errorMsg, setErrorMsg] = useState<string | null>( null )
   const [countdown, setCountdown] = useState( 5 )
+
+  // ── Resolve real phase once, after mount/hydration ────────────────
+  useEffect( () => {
+    const resolved = resolveInitialPhase()
+    if ( resolved.charge ) setCharge( resolved.charge )
+    setPhase( resolved.phase )
+     
+  }, [] )
 
   // ── Create charge ────────────────────────────────────────────────
   const creatingRef = useRef( false )
@@ -192,10 +204,10 @@ export function PaymentClient() {
 
   // ── Redirect immediately if re-entering after payment ─────────────
   useEffect( () => {
-    if ( initial.phase === 'paid' ) {
+    if ( phase === 'paid' ) {
       router.replace( '/booth' )
     }
-  }, [initial.phase, router] )
+  }, [phase, router] )
 
   // ── Countdown after paid, then navigate to /booth ────────────────
   useEffect( () => {
@@ -235,10 +247,38 @@ export function PaymentClient() {
 
   // ── Render ───────────────────────────────────────────────────────
 
+  // Still resolving store hydration — show a neutral loader so we never
+  // flash 'idle' or stale UI before snapping to the real phase.
+  if ( phase === 'loading' ) {
+    return (
+      <main className="flex items-center justify-center h-screen bg-neutral-100">
+        <Loader2 className="size-10 animate-spin text-muted-foreground" />
+      </main>
+    )
+  }
+
   // Block re-entry when payment is already completed — render nothing
   // while the redirect fires (avoids flickering the countdown UI).
-  if ( initial.phase === 'paid' ) {
-    return null
+  if ( phase === 'paid' ) {
+    return (
+      <main className="flex items-center justify-center h-screen bg-neutral-100">
+        <div className="flex flex-col items-center gap-6 px-4 animate-in fade-in duration-500">
+          <CheckCircle2 className="size-16 text-emerald-500" />
+          <div className="text-center">
+            <h3 className="text-xl font-bold text-emerald-600">Payment Successful!</h3>
+            <p className="text-sm text-muted-foreground mt-1">
+              Get ready for your photo session!
+            </p>
+            <p className="text-3xl font-bold text-emerald-600 mt-4 tabular-nums">
+              {countdown}
+            </p>
+            <p className="text-xs text-muted-foreground mt-1">
+              Starting in {countdown} second{countdown !== 1 ? 's' : ''}&hellip;
+            </p>
+          </div>
+        </div>
+      </main>
+    )
   }
 
   if ( phase === 'idle' ) {
@@ -373,28 +413,6 @@ export function PaymentClient() {
           >
             Create New Payment
           </Button>
-        </div>
-      </main>
-    )
-  }
-
-  if ( phase === 'paid' ) {
-    return (
-      <main className="flex items-center justify-center h-screen bg-neutral-100">
-        <div className="flex flex-col items-center gap-6 px-4 animate-in fade-in duration-500">
-          <CheckCircle2 className="size-16 text-emerald-500" />
-          <div className="text-center">
-            <h3 className="text-xl font-bold text-emerald-600">Payment Successful!</h3>
-            <p className="text-sm text-muted-foreground mt-1">
-              Get ready for your photo session!
-            </p>
-            <p className="text-3xl font-bold text-emerald-600 mt-4 tabular-nums">
-              {countdown}
-            </p>
-            <p className="text-xs text-muted-foreground mt-1">
-              Starting in {countdown} second{countdown !== 1 ? 's' : ''}&hellip;
-            </p>
-          </div>
         </div>
       </main>
     )

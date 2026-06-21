@@ -108,8 +108,12 @@ async function generateGifFfmpeg( files: string[], outPath: string ) {
   } );
 
   // Clean up temp files
-  try { await import( "node:fs/promises" ).then( ( m ) => m.unlink( listPath ) ); } catch { /* ok */ }
-  try { await import( "node:fs/promises" ).then( ( m ) => m.unlink( palettePath ) ); } catch { /* ok */ }
+  try {
+    await import( "node:fs/promises" ).then( ( m ) => m.unlink( listPath ) ); 
+  } catch { /* ok */ }
+  try {
+    await import( "node:fs/promises" ).then( ( m ) => m.unlink( palettePath ) ); 
+  } catch { /* ok */ }
 }
 
 /** Fallback: sharp-based contact-sheet GIF when ffmpeg is unavailable. */
@@ -217,7 +221,9 @@ export async function generateSlideshowVideo(
     } );
   } );
 
-  try { await import( "node:fs/promises" ).then( ( m ) => m.unlink( listPath ) ); } catch { /* ok */ }
+  try {
+    await import( "node:fs/promises" ).then( ( m ) => m.unlink( listPath ) ); 
+  } catch { /* ok */ }
 
   return { file : vidName, url : `/captures/${vidName}` };
 }

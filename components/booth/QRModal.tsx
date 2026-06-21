@@ -60,7 +60,10 @@ export function QRModal() {
     >
       <DialogTrigger
         render={
-          <Button variant="outline" size="sm" className="gap-1.5">
+          <Button variant="outline"
+            size="sm"
+            className="gap-1.5"
+          >
             <QrCode className="size-4" />
             <span className="hidden sm:inline">Open on phone</span>
           </Button>

@@ -1,85 +1,93 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useReducer, useRef } from 'react'
 import { useRouter } from 'next/navigation'
-import { Loader2, AlertCircle, CheckCircle2, ExternalLink, X, Camera } from 'lucide-react'
+import { Loader2, AlertCircle, CheckCircle2, ExternalLink, X } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { useBoothStore } from '@/store/boothStore'
+import { usePaymentPolling } from '@/lib/hooks/usePaymentPolling'
 
 // ── Types ──────────────────────────────────────────────────────────
 
 type Phase = 'loading' | 'idle' | 'creating' | 'pending' | 'settled' | 'paid' | 'expired' | 'error'
 
 type Charge = {
-  orderId: string
-  qrCodeUrl: string
-  deeplinkUrl: string | null
-  boothName: string
+  orderId : string
+  qrCodeUrl : string
+  deeplinkUrl : string | null
+  boothName : string
 }
 
-type PollResult =
-  | { status: 'settlement' }
-  | { status: 'terminal'; reason: string }
-  | { status: 'polling' }
+// ── Reducer: payment state machine ─────────────────────────────────
 
-const POLL_INTERVAL = 3_000
-const POLL_TIMEOUT = 300_000
+type PaymentState = {
+  phase : Phase
+  charge : Charge | null
+  errorMsg : string | null
+  countdown : number
+}
 
-// ── Hook: polling ─────────────────────────────────────────────────
+type PaymentAction =
+  | { type : 'HYDRATE'; phase : Phase; charge : Charge | null }
+  | { type : 'CREATE_START' }
+  | { type : 'CREATE_OK'; charge : Charge }
+  | { type : 'CREATE_ERROR'; error : string }
+  | { type : 'SETTLEMENT' }
+  | { type : 'TERMINAL'; reason : string }
+  | { type : 'TICK' }
+  | { type : 'PAID' }
+  | { type : 'RESET' }
 
-function usePaymentPolling( orderId: string | null ): PollResult {
-  const [result, setResult] = useState<PollResult>( { status : 'polling' } )
+const initialState: PaymentState = {
+  phase     : 'loading',
+  charge    : null,
+  errorMsg  : null,
+  countdown : 5,
+}
 
-  useEffect( () => {
-    if ( !orderId ) return
+function paymentReducer( state: PaymentState, action: PaymentAction ): PaymentState {
+  switch ( action.type ) {
+  case 'HYDRATE':
+    return { ...state, phase : action.phase, charge : action.charge }
 
-    // Reset to 'polling' so stale results from a previous charge
-    // don't leak into a new one.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setResult( { status : 'polling' } )
+  case 'CREATE_START':
+    return { ...state, phase : 'creating', errorMsg : null }
 
-    let alive = true
-    let interval: ReturnType<typeof setInterval> | null = null
-    let timeout: ReturnType<typeof setTimeout> | null = null
+  case 'CREATE_OK':
+    return { ...state, phase : 'pending', charge : action.charge }
 
-    const poll = async () => {
-      try {
-        const res = await fetch(
-          `/api/booth/payment/status?orderId=${orderId}`,
-          { headers : { 'x-booth-key' : process.env.NEXT_PUBLIC_BOOTH_API_KEY || '' } },
-        )
-        const data = await res.json()
-        if ( !alive || !res.ok ) return
+  case 'CREATE_ERROR':
+    return { ...state, phase : 'error', errorMsg : action.error }
 
-        if ( data.transactionStatus === 'settlement' ) {
-          setResult( { status : 'settlement' } )
-        } else if ( ['expire', 'cancel', 'deny', 'failure'].includes( data.transactionStatus ) ) {
-          setResult( { status : 'terminal', reason : data.transactionStatus } )
-        }
-      } catch { /* network hiccup — keep polling */ }
-    }
+  case 'SETTLEMENT':
+    return { ...state, phase : 'settled', countdown : 5 }
 
-    poll()
-    interval = setInterval( poll, POLL_INTERVAL )
-    timeout = setTimeout( () => {
-      if ( alive ) setResult( { status : 'terminal', reason : 'expire' } )
-    }, POLL_TIMEOUT )
+  case 'TERMINAL': {
+    const phase = action.reason === 'expire' ? 'expired' as const : 'error' as const
 
-    return () => {
-      alive = false
-      if ( interval ) clearInterval( interval )
-      if ( timeout ) clearTimeout( timeout )
-    }
-  }, [orderId] )
+    return { ...state, phase, errorMsg : `Payment ${action.reason}` }
+  }
 
-  return result
+  case 'TICK':
+    return { ...state, countdown : Math.max( 0, state.countdown - 1 ) }
+
+  case 'PAID':
+    return { ...state, phase : 'paid' }
+
+  case 'RESET':
+    return { ...initialState, phase : 'idle' }
+
+  default:
+    return state
+  }
 }
 
 // ── Helpers ────────────────────────────────────────────────────────
 
-/** Determine the resolved phase from the persisted store state. */
-function resolveInitialPhase(): { phase: Phase; charge: Charge | null } {
+/** Determine the initial phase from persisted store state.
+ *  Called inside useEffect so Zustand `persist` hydration is complete. */
+function resolveInitialPhase(): { phase : Phase; charge : Charge | null } {
   const s = useBoothStore.getState()
 
   // Payment already completed — block re-entry to this page.
@@ -107,34 +115,64 @@ function resolveInitialPhase(): { phase: Phase; charge: Charge | null } {
 export function PaymentClient() {
   const router = useRouter()
   const { sessionId, setPayment } = useBoothStore()
+  const [state, dispatch] = useReducer( paymentReducer, initialState )
+  const { phase, charge, errorMsg, countdown } = state
 
-  // Start in 'loading' — we don't trust synchronous store reads on first
-  // paint because persisted (e.g. Zustand `persist`) state may not have
-  // rehydrated from localStorage yet. Resolving in an effect (below)
-  // guarantees we only render the real phase once hydration is done,
-  // which removes the idle/pending flash on reload.
-  const [phase, setPhase] = useState<Phase>( 'loading' )
-  const [charge, setCharge] = useState<Charge | null>( null )
-  const [errorMsg, setErrorMsg] = useState<string | null>( null )
-  const [countdown, setCountdown] = useState( 5 )
-
-  // ── Resolve real phase once, after mount/hydration ────────────────
-  useEffect( () => {
-    const resolved = resolveInitialPhase()
-    if ( resolved.charge ) setCharge( resolved.charge )
-    setPhase( resolved.phase )
-     
-  }, [] )
-
-  // ── Create charge ────────────────────────────────────────────────
   const creatingRef = useRef( false )
 
+  // ── Hydrate from persisted store after mount ───────────────────
+  useEffect( () => {
+    const resolved = resolveInitialPhase()
+    dispatch( { type : 'HYDRATE', phase : resolved.phase, charge : resolved.charge } )
+  }, [] )
+
+  // ── Poll while pending ─────────────────────────────────────────
+  const pollResult = usePaymentPolling(
+    phase === 'pending' ? charge?.orderId ?? null : null,
+  )
+
+  // ── React to poll result ───────────────────────────────────────
+  useEffect( () => {
+    if ( pollResult.status === 'settlement' ) {
+      dispatch( { type : 'SETTLEMENT' } )
+    } else if ( pollResult.status === 'terminal' ) {
+      dispatch( { type : 'TERMINAL', reason : pollResult.reason } )
+      setPayment( { paymentStatus : pollResult.reason as 'expired' | 'error' } )
+    }
+    // 'polling' is intentionally ignored
+  }, [pollResult, setPayment] )
+
+  // ── Redirect immediately if re-entering after payment ───────────
+  useEffect( () => {
+    if ( phase === 'paid' ) {
+      router.replace( '/booth' )
+    }
+  }, [phase, router] )
+
+  // ── Countdown after settlement ─────────────────────────────────
+  useEffect( () => {
+    if ( phase !== 'settled' ) return
+
+    const id = setInterval( () => dispatch( { type : 'TICK' } ), 1000 )
+
+    return () => clearInterval( id )
+  }, [phase] )
+
+  // ── Countdown complete → promote to paid & navigate ────────────
+  useEffect( () => {
+    if ( phase === 'settled' && countdown === 0 ) {
+      dispatch( { type : 'PAID' } )
+      setPayment( { paymentStatus : 'paid' } )
+      router.push( '/booth' )
+    }
+  }, [phase, countdown, router, setPayment] )
+
+  // ── Create charge ──────────────────────────────────────────────
   const createCharge = useCallback( async () => {
     if ( creatingRef.current ) return
     creatingRef.current = true
 
-    setPhase( 'creating' )
-    setErrorMsg( null )
+    dispatch( { type : 'CREATE_START' } )
     const paySessionId = sessionId || Math.random().toString( 36 ).slice( 2, 10 )
 
     try {
@@ -152,13 +190,15 @@ export function PaymentClient() {
 
       useBoothStore.setState( { sessionId : paySessionId } )
 
-      setCharge( {
-        orderId     : data.orderId,
-        qrCodeUrl   : data.qrCodeUrl,
-        deeplinkUrl : data.deeplinkUrl ?? null,
-        boothName   : data.booth?.name || '',
+      dispatch( {
+        type   : 'CREATE_OK',
+        charge : {
+          orderId     : data.orderId,
+          qrCodeUrl   : data.qrCodeUrl,
+          deeplinkUrl : data.deeplinkUrl ?? null,
+          boothName   : data.booth?.name || '',
+        },
       } )
-      setPhase( 'pending' )
       setPayment( {
         paymentStatus      : 'pending',
         paymentOrderId     : data.orderId,
@@ -166,91 +206,35 @@ export function PaymentClient() {
         paymentDeeplinkUrl : data.deeplinkUrl,
       } )
     } catch ( err ) {
-      setPhase( 'error' )
-      setErrorMsg( err instanceof Error ? err.message : 'Unknown error' )
+      dispatch( {
+        type  : 'CREATE_ERROR',
+        error : err instanceof Error ? err.message : 'Unknown error',
+      } )
     } finally {
       creatingRef.current = false
     }
   }, [sessionId, setPayment] )
 
-  // ── Poll while pending ───────────────────────────────────────────
-  const pollResult = usePaymentPolling( phase === 'pending' ? charge?.orderId ?? null : null )
-
-  // ── React to poll result ─────────────────────────────────────────
-  const prevPollStatusRef = useRef<string>( pollResult.status )
-  const prevPollReasonRef = useRef<string | undefined>(
-    pollResult.status === 'terminal' ? pollResult.reason : undefined,
-  )
+  // ── Auto-create charge when idle (no manual "Start" step) ──────
   useEffect( () => {
-    const currentReason = pollResult.status === 'terminal' ? pollResult.reason : undefined
-    if (
-      pollResult.status === prevPollStatusRef.current &&
-      currentReason === prevPollReasonRef.current
-    ) {
-      return
+    if ( phase === 'idle' ) {
+      createCharge()
     }
-    prevPollStatusRef.current = pollResult.status
-    prevPollReasonRef.current = currentReason
+  }, [phase, createCharge] )
 
-    if ( pollResult.status === 'settlement' ) {
-      // Transition to 'settled' first — countdown runs here.
-      // We only promote to 'paid' (and persist) after the countdown
-      // finishes, so that revisiting the page sees 'paid' and
-      // redirects instantly with no countdown.
-      setPhase( 'settled' )
-    } else if ( pollResult.status === 'terminal' ) {
-      setPhase( pollResult.reason === 'expire' ? 'expired' : 'error' )
-      setErrorMsg( `Payment ${pollResult.reason}` )
-      setPayment( { paymentStatus : pollResult.reason as 'expired' | 'error' } )
-    }
-  }, [pollResult, setPayment] )
-
-  // ── Redirect immediately if re-entering after payment ─────────────
-  useEffect( () => {
-    if ( phase === 'paid' ) {
-      router.replace( '/booth' )
-    }
-  }, [phase, router] )
-
-  // ── Countdown after settlement, then promote to paid & navigate ──
-  useEffect( () => {
-    if ( phase !== 'settled' ) return
-    setCountdown( 5 )
-
-    const id = setInterval( () => {
-      setCountdown( ( prev ) => Math.max( 0, prev - 1 ) )
-    }, 1000 )
-
-    return () => clearInterval( id )
-  }, [phase] )
-
-  useEffect( () => {
-    if ( phase === 'settled' && countdown === 0 ) {
-      setPhase( 'paid' )
-      setPayment( { paymentStatus : 'paid' } )
-      router.push( '/booth' )
-    }
-  }, [phase, countdown, router, setPayment] )
-
-  // ── Handlers ─────────────────────────────────────────────────────
-  const handleStartPayment = useCallback( () => {
-    createCharge()
-  }, [createCharge] )
-
+  // ── Retry handler ──────────────────────────────────────────────
   const handleRetry = useCallback( () => {
-    useBoothStore.setState( {
+    setPayment( {
       paymentStatus      : 'idle',
       paymentOrderId     : null,
       paymentQrCodeUrl   : null,
       paymentDeeplinkUrl : null,
     } )
-
-    setCharge( null )
-    setErrorMsg( null )
+    dispatch( { type : 'RESET' } )
     createCharge()
-  }, [createCharge] )
+  }, [createCharge, setPayment] )
 
-  // ── Render ───────────────────────────────────────────────────────
+  // ── Render ─────────────────────────────────────────────────────
 
   // Still resolving store hydration — show a neutral loader so we never
   // flash 'idle' or stale UI before snapping to the real phase.
@@ -290,34 +274,6 @@ export function PaymentClient() {
     return (
       <main className="flex items-center justify-center h-screen bg-neutral-100">
         <Loader2 className="size-10 animate-spin text-muted-foreground" />
-      </main>
-    )
-  }
-
-  if ( phase === 'idle' ) {
-    return (
-      <main className="flex items-center justify-center h-screen bg-neutral-100">
-        <div className="flex flex-col items-center gap-8 px-4">
-          <div className="flex flex-col items-center gap-4">
-            <div className="flex items-center justify-center size-20 rounded-full bg-primary/10">
-              <Camera className="size-10 text-primary" />
-            </div>
-            <div className="text-center">
-              <h2 className="text-3xl font-bold tracking-tight lg:text-4xl text-foreground">
-                Photo Booth
-              </h2>
-              <p className="max-w-md mx-auto mt-2 text-sm text-muted-foreground lg:text-base">
-                Tap below to start your photo session!
-              </p>
-            </div>
-          </div>
-          <Button
-            size="lg"
-            onClick={handleStartPayment}
-          >
-            Start Session
-          </Button>
-        </div>
       </main>
     )
   }

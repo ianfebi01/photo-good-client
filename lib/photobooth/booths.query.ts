@@ -15,12 +15,14 @@ async function parseJson<T>( response : Response, fallbackMessage : string ) : P
     const message = data?.error ?? fallbackMessage
     throw new Error( message )
   }
+  
   return data as T
 }
 
 export async function getBooths() : Promise<Booth[]> {
   const response = await fetch( '/api/admin/booths', { cache : 'no-store' } )
   const data = await parseJson<{ booths : Booth[] }>( response, 'Failed to load booths' )
+  
   return data.booths
 }
 
@@ -31,6 +33,7 @@ export async function toggleBooth( id : string, active : boolean ) : Promise<Boo
     body    : JSON.stringify( { active } ),
   } )
   const data = await parseJson<{ booth : Booth }>( response, 'Failed to update booth' )
+  
   return data.booth
 }
 

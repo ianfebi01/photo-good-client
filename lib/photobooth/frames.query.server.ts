@@ -2,7 +2,10 @@ import 'server-only'
 
 import type { ClientFrame } from './frames.client'
 import type { FramesResponse, PageArg } from './frames.query'
-import { externalFetch } from './config'
+import { externalFetch, FetchError } from './config'
+
+// Re-export so consumers can catch FetchError without reaching into config.
+export { FetchError }
 
 export type BoothFrameSlot = {
   left : number
@@ -44,7 +47,8 @@ export async function fetchBoothFrames(): Promise<ClientFrame[]> {
     } )
 
     if ( !res.ok ) {
-      throw new Error( `Failed to fetch booth frames: ${res.statusText}` )
+      const body = await res.text().catch( () => '' )
+      throw new FetchError( body || res.statusText, res.status )
     }
 
     const data = ( await res.json() ) as BoothFramesResponse
@@ -66,12 +70,27 @@ export async function fetchBoothFrames(): Promise<ClientFrame[]> {
     // eslint-disable-next-line no-console
     console.error( 'Error fetching frames from external API:', err )
 
-    return []
+    throw err
   }
 }
 
 export async function getFramesForSsr( { page, limit }: PageArg ): Promise<FramesResponse> {
-  const all = await fetchBoothFrames()
+  let all: ClientFrame[]
+  try {
+    all = await fetchBoothFrames()
+  } catch ( err ) {
+    if ( err instanceof FetchError ) {
+      // Re-throw so the API route can forward the correct status code.
+      // SSR pages that call this directly will see the error page with the
+      // right status — Next.js surfaces thrown errors from server components.
+      throw err
+    }
+    // Unexpected errors (network, etc.) — surface as 502 Bad Gateway
+    throw new FetchError(
+      err instanceof Error ? err.message : 'Failed to fetch frames',
+      502,
+    )
+  }
   const total = all.length
   const start = ( page - 1 ) * limit
 

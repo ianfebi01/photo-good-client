@@ -1,4 +1,4 @@
-import { fetchBoothFrames } from "@/lib/photobooth/frames.query.server";
+import { fetchBoothFrames, FetchError } from "@/lib/photobooth/frames.query.server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -9,7 +9,16 @@ export async function GET( request: Request ) {
   const page = Math.max( 1, Number( searchParams.get( "page" ) ) || 1 );
   const limit = Math.min( 50, Math.max( 1, Number( searchParams.get( "limit" ) ) || 8 ) );
 
-  const all = await fetchBoothFrames();
+  let all;
+  try {
+    all = await fetchBoothFrames();
+  } catch ( err ) {
+    if ( err instanceof FetchError ) {
+      return Response.json( { error : err.message }, { status : err.status } )
+    }
+
+    return Response.json( { error : 'Failed to fetch frames' }, { status : 502 } )
+  }
   const total = all.length;
   const start = ( page - 1 ) * limit;
   const pageFrames = all.slice( start, start + limit );

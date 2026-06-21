@@ -1,11 +1,24 @@
 import path from "node:path";
 
+/** Error thrown by externalFetch when the upstream API returns a non-2xx status. */
+export class FetchError extends Error {
+  status: number
+  constructor( message: string, status: number ) {
+    super( message )
+    this.name = 'FetchError'
+    this.status = status
+  }
+}
+
 /** The base URL of the external frames/booth API. */
 export const EXTERNAL_BASE_URL = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000';
 
 /**
  * A global authorized fetcher that prepends the EXTERNAL_BASE_URL to relative paths
  * and automatically attaches the BOOTH_API_KEY authorization header.
+ *
+ * Automatically throws {@link FetchError} on 401 responses so every caller
+ * propagates the correct status code without duplicating the check.
  */
 export async function externalFetch( pathOrUrl: string, init?: RequestInit ): Promise<Response> {
   const url = pathOrUrl.startsWith( 'http' )
@@ -19,10 +32,18 @@ export async function externalFetch( pathOrUrl: string, init?: RequestInit ): Pr
     headers.set( 'Authorization', `Bearer ${apiKey}` );
   }
 
-  return fetch( url, {
+  const res = await fetch( url, {
     ...init,
     headers,
   } );
+
+  // Central 401 interceptor — throw so every caller forwards the right status.
+  if ( res.status === 401 ) {
+    const body = await res.text().catch( () => '' )
+    throw new FetchError( body || res.statusText, 401 )
+  }
+
+  return res
 }
 
 /** Absolute directory where captures and composed strips are written. */

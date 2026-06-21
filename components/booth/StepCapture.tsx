@@ -16,7 +16,7 @@ import { FramePreview } from './FramePreview'
 import { ShutterControls } from './ShutterControls'
 import { getCameraPreviewUrl } from '@/lib/photobooth/frames.query'
 import { uploadCountdownClip } from '@/lib/photobooth/frames.query'
-import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { ChevronRight } from 'lucide-react'
 
 /** Draw the live MJPEG img onto a canvas every frame so we can record it. */
 function useRecordingCanvas(
@@ -70,7 +70,6 @@ export function StepCapture() {
     acceptPending,
     retakePending,
     takeShot,
-    reset,
     goToFilter,
   } = useBoothStore()
 
@@ -461,15 +460,6 @@ export function StepCapture() {
       {/* Header */}
       <div className="flex justify-between items-center gap-4">
         <div className="flex items-center gap-3">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={reset}
-            disabled={busy}
-            className="gap-1"
-          >
-            <ChevronLeft className="size-4" />
-          </Button>
           <div className="flex flex-col">
             <span className="text-sm font-bold text-neutral-800 font-sans">
               Capture Photos

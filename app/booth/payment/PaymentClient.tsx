@@ -9,7 +9,7 @@ import { useBoothStore } from '@/store/boothStore'
 
 // ── Types ──────────────────────────────────────────────────────────
 
-type Phase = 'loading' | 'idle' | 'creating' | 'pending' | 'paid' | 'expired' | 'error'
+type Phase = 'loading' | 'idle' | 'creating' | 'pending' | 'settled' | 'paid' | 'expired' | 'error'
 
 type Charge = {
   orderId: string
@@ -193,8 +193,11 @@ export function PaymentClient() {
     prevPollReasonRef.current = currentReason
 
     if ( pollResult.status === 'settlement' ) {
-      setPhase( 'paid' )
-      setPayment( { paymentStatus : 'paid' } )
+      // Transition to 'settled' first — countdown runs here.
+      // We only promote to 'paid' (and persist) after the countdown
+      // finishes, so that revisiting the page sees 'paid' and
+      // redirects instantly with no countdown.
+      setPhase( 'settled' )
     } else if ( pollResult.status === 'terminal' ) {
       setPhase( pollResult.reason === 'expire' ? 'expired' : 'error' )
       setErrorMsg( `Payment ${pollResult.reason}` )
@@ -209,9 +212,9 @@ export function PaymentClient() {
     }
   }, [phase, router] )
 
-  // ── Countdown after paid, then navigate to /booth ────────────────
+  // ── Countdown after settlement, then promote to paid & navigate ──
   useEffect( () => {
-    if ( phase !== 'paid' ) return
+    if ( phase !== 'settled' ) return
     setCountdown( 5 )
 
     const id = setInterval( () => {
@@ -222,10 +225,12 @@ export function PaymentClient() {
   }, [phase] )
 
   useEffect( () => {
-    if ( phase === 'paid' && countdown === 0 ) {
+    if ( phase === 'settled' && countdown === 0 ) {
+      setPhase( 'paid' )
+      setPayment( { paymentStatus : 'paid' } )
       router.push( '/booth' )
     }
-  }, [phase, countdown, router] )
+  }, [phase, countdown, router, setPayment] )
 
   // ── Handlers ─────────────────────────────────────────────────────
   const handleStartPayment = useCallback( () => {
@@ -257,9 +262,8 @@ export function PaymentClient() {
     )
   }
 
-  // Block re-entry when payment is already completed — render nothing
-  // while the redirect fires (avoids flickering the countdown UI).
-  if ( phase === 'paid' ) {
+  // Fresh settlement: show countdown, then promote to 'paid' & persist.
+  if ( phase === 'settled' ) {
     return (
       <main className="flex items-center justify-center h-screen bg-neutral-100">
         <div className="flex flex-col items-center gap-6 px-4 animate-in fade-in duration-500">
@@ -277,6 +281,15 @@ export function PaymentClient() {
             </p>
           </div>
         </div>
+      </main>
+    )
+  }
+
+  // Revisit after payment: store already says 'paid', redirect instantly.
+  if ( phase === 'paid' ) {
+    return (
+      <main className="flex items-center justify-center h-screen bg-neutral-100">
+        <Loader2 className="size-10 animate-spin text-muted-foreground" />
       </main>
     )
   }

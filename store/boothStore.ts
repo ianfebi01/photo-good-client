@@ -75,7 +75,7 @@ export interface BoothState {
   step: 0 | 1 | 2 | 3;
 
   // ── Payment ────────────────────────────────────────
-  paymentStatus: 'idle' | 'pending' | 'paid' | 'expired' | 'error';
+  paymentStatus: 'idle' | 'pending' | 'paid' | 'expired' | 'error' | '';
   paymentOrderId: string | null;
   paymentQrCodeUrl: string | null;
   paymentDeeplinkUrl: string | null;
@@ -158,7 +158,7 @@ export const useBoothStore = create<BoothState>()(
       timerSecondsLeft : null,
 
       // Payment
-      paymentStatus      : 'idle' as const,
+      paymentStatus      : '' as const,
       paymentOrderId     : null,
       paymentQrCodeUrl   : null,
       paymentDeeplinkUrl : null,

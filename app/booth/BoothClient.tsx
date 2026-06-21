@@ -42,7 +42,7 @@ export function BoothClient() {
 
   // ── Payment guard: redirect if not paid ─────────────────────────
   useEffect( () => {
-    if ( paymentStatus !== 'paid' ) {
+    if ( paymentStatus && paymentStatus !== 'paid' ) {
       router.replace( '/booth/payment' )
     }
   }, [paymentStatus, router] )

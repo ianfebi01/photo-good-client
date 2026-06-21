@@ -160,7 +160,7 @@ export function StepResult() {
 
   const resetSession = useCallback( () => {
     reset()
-    router.push( '/' )
+    router.push( '/booth/payment' )
   }, [reset, router] )
 
   // ── Idle timer expiry → navigate home ───────────────────────────

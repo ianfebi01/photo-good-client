@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useRef } from 'react'
+import { useRouter } from 'next/navigation'
 import { useQuery } from '@tanstack/react-query'
 import { Loader2, AlertCircle } from 'lucide-react'
 
@@ -33,10 +34,18 @@ const STEP_COMPONENTS: Record<number, React.ComponentType> = {
 // ── Main component ─────────────────────────────────────────────────
 
 export function BoothClient() {
-  const { step, setStatus, setFrames, restartPreview } = useBoothStore()
+  const { step, setStatus, setFrames, restartPreview, paymentStatus } = useBoothStore()
+  const router = useRouter()
 
   // Override body bg + theme-color for iOS Safari bars.
   useBodyBackground( '#f5f5f5' )
+
+  // ── Payment guard: redirect if not paid ─────────────────────────
+  useEffect( () => {
+    if ( paymentStatus !== 'paid' ) {
+      router.replace( '/booth/payment' )
+    }
+  }, [paymentStatus, router] )
 
   // ── Camera discovery (fire-and-forget, guarded against unmount) ─
   useEffect( () => {
@@ -100,6 +109,9 @@ export function BoothClient() {
       restartPreview()
     }
   }, [statusQuery.data, statusQuery.isError, setStatus, restartPreview] )
+
+  // ── Don't render booth steps if payment guard hasn't passed ─────
+  if ( paymentStatus !== 'paid' ) return null
 
   // ── Frames loading / error state ────────────────────────────────
   if ( framesQuery.isLoading && step === 0 ) {

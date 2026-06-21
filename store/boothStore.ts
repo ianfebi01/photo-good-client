@@ -74,6 +74,12 @@ export interface BoothState {
 
   step: 0 | 1 | 2 | 3;
 
+  // ── Payment ────────────────────────────────────────
+  paymentStatus: 'idle' | 'pending' | 'paid' | 'expired' | 'error';
+  paymentOrderId: string | null;
+  paymentQrCodeUrl: string | null;
+  paymentDeeplinkUrl: string | null;
+
   // ── Timer ──────────────────────────────────────────
   /** Whether the step idle timer is enabled (e.g., kiosk mode). */
   timerEnabled: boolean;
@@ -101,11 +107,12 @@ export interface BoothState {
   setTimerEnabled: ( enabled: boolean ) => void;
   setTimerSecondsLeft: ( seconds: number | null ) => void;
   resetTimer: () => void;
+  setPayment: ( payment: Partial<Pick<BoothState, 'paymentStatus' | 'paymentOrderId' | 'paymentQrCodeUrl' | 'paymentDeeplinkUrl'>> ) => void;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────
 
-/** Fields that are cleared when a session resets or a new frame is selected. */
+/** Fields cleared when a session resets or a new frame is selected. */
 function freshSessionState(): Partial<BoothState> {
   return {
     started        : false,
@@ -119,7 +126,6 @@ function freshSessionState(): Partial<BoothState> {
     loopVideoUrl   : null,
     countdownClips : [],
     error          : null,
-    step           : 0,
   };
 }
 
@@ -149,6 +155,12 @@ export const useBoothStore = create<BoothState>()(
       step             : 0,
       timerEnabled     : true,
       timerSecondsLeft : null,
+
+      // Payment
+      paymentStatus      : 'idle' as const,
+      paymentOrderId     : null,
+      paymentQrCodeUrl   : null,
+      paymentDeeplinkUrl : null,
 
       // ── Setters ────────────────────────────────────
       setStatus : ( status ) => set( { status } ),
@@ -187,10 +199,15 @@ export const useBoothStore = create<BoothState>()(
         const { frames } = get();
         set( {
           ...freshSessionState(),
-          frameKey         : frames[0]?.key ?? DEFAULT_FRAME_KEY,
-          flash            : false,
-          streamKey        : newId(),
-          timerSecondsLeft : null,
+          frameKey           : frames[0]?.key ?? DEFAULT_FRAME_KEY,
+          flash              : false,
+          streamKey          : newId(),
+          step               : 0,
+          timerSecondsLeft   : null,
+          paymentStatus      : 'idle',
+          paymentOrderId     : null,
+          paymentQrCodeUrl   : null,
+          paymentDeeplinkUrl : null,
         } );
       },
 
@@ -332,21 +349,30 @@ export const useBoothStore = create<BoothState>()(
         const timeout = STEP_TIMEOUTS[step] ?? 30;
         set( { timerSecondsLeft : timeout } );
       },
+
+      // ── Payment ────────────────────────────────────
+      setPayment : ( payment ) => set( payment ),
     } ),
     {
       name       : "booth-store",
       storage    : createJSONStorage( () => localStorage ),
       partialize : ( state ) => ( {
-        started        : state.started,
-        frameKey       : state.frameKey,
-        sessionId      : state.sessionId,
-        photos         : state.photos,
-        strip          : state.strip,
-        step           : state.step,
-        gifUrl         : state.gifUrl,
-        videoUrl       : state.videoUrl,
-        loopVideoUrl   : state.loopVideoUrl,
-        countdownClips : state.countdownClips,
+        started            : state.started,
+        frameKey           : state.frameKey,
+        sessionId          : state.sessionId,
+        photos             : state.photos,
+        strip              : state.strip,
+        step               : state.step,
+        gifUrl             : state.gifUrl,
+        videoUrl           : state.videoUrl,
+        loopVideoUrl       : state.loopVideoUrl,
+        countdownClips     : state.countdownClips,
+        timerSecondsLeft   : state.timerSecondsLeft,
+        timerEnabled       : state.timerEnabled,
+        paymentStatus      : state.paymentStatus,
+        paymentOrderId     : state.paymentOrderId,
+        paymentQrCodeUrl   : state.paymentQrCodeUrl,
+        paymentDeeplinkUrl : state.paymentDeeplinkUrl,
       } ),
     },
   ),

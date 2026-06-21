@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useCallback, useRef } from 'react'
+import { useRouter } from 'next/navigation'
 import { useBoothStore, STEP_TIMEOUTS, TIMEOUT_WARNING_SECONDS } from '@/store/boothStore'
 import { cn } from '@/lib/utils'
 
@@ -19,6 +20,7 @@ export function StepTimer() {
     reset,
   } = useBoothStore()
 
+  const router = useRouter()
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>( null )
 
   const resetTimer = useCallback( () => {
@@ -41,8 +43,9 @@ export function StepTimer() {
       if ( current === null ) return
 
       if ( current <= 1 ) {
-        // Time's up — auto-reset
+        // Time's up — auto-reset and go to payment
         reset()
+        router.push( '/booth/payment' )
       } else {
         setTimerSecondsLeft( current - 1 )
       }
@@ -51,7 +54,7 @@ export function StepTimer() {
     return () => {
       if ( intervalRef.current ) clearInterval( intervalRef.current )
     }
-  }, [timerEnabled, timerSecondsLeft, setTimerSecondsLeft, reset] )
+  }, [timerEnabled, timerSecondsLeft, setTimerSecondsLeft, reset, router] )
 
   // Reset timer on user interaction
   useEffect( () => {

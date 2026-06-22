@@ -2,7 +2,7 @@ import 'server-only'
 
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { FRAMES_DIR, FRAMES_MANIFEST_PATH, externalFetch } from './config'
+import { EXTERNAL_BASE_URL, FRAMES_DIR, FRAMES_MANIFEST_PATH, externalFetch } from './config'
 import type { ClientFrame } from './frames.client'
 
 // ── Types ──────────────────────────────────────────────────────────
@@ -43,7 +43,7 @@ export async function syncAllFrames(): Promise<ClientFrame[]> {
   if ( !res.ok ) {
     throw new Error( `Failed to fetch frames from external API: ${res.statusText}` )
   }
-
+  
   const data = await res.json()
   const externalFrames: Array<{
     key: string
@@ -71,7 +71,13 @@ export async function syncAllFrames(): Promise<ClientFrame[]> {
     const localPath = path.join( FRAMES_DIR, localFile )
 
     try {
-      const imgRes = await fetch( f.imageUrl )
+      // Resolve relative image URLs against the external base URL so the
+      // download works server-side (Node fetch requires absolute URLs).
+      const imageUrl = f.imageUrl.startsWith( 'http' )
+        ? f.imageUrl
+        : `${EXTERNAL_BASE_URL.replace( /\/$/, '' )}/${f.imageUrl.replace( /^\//, '' )}`
+
+      const imgRes = await fetch( imageUrl )
       if ( imgRes.ok ) {
         const buffer = Buffer.from( await imgRes.arrayBuffer() )
         await fs.writeFile( localPath, buffer )

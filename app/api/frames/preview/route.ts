@@ -1,6 +1,6 @@
 import sharp from 'sharp'
 import fs from 'node:fs/promises'
-import { getFrame, externalFetch } from '@/lib/photobooth/config'
+import { getFrame, EXTERNAL_BASE_URL, externalFetch } from '@/lib/photobooth/config'
 import { detectGreenSlots, clearGreenPixels } from '@/lib/photobooth/slots'
 
 export const runtime = 'nodejs'
@@ -113,9 +113,34 @@ export async function GET( request: Request ) {
       // Local filesystem frame (built-in or legacy user-manifest)
       buffer = await fs.readFile( frame.image )
     } else {
-      // Fetch from the external URL
-      const res = await externalFetch( frame.publicUrl );
-      if ( !res.ok ) throw new Error( `Failed to fetch frame image: ${res.statusText}` );
+      // Fetch from the external URL.
+      if ( !frame.publicUrl ) {
+        throw new Error( `Frame "${key}" has no publicUrl — the external API may not have returned an imageUrl` )
+      }
+
+      // Resolve relative URLs against the external base URL.
+      const imageUrl = frame.publicUrl.startsWith( 'http' )
+        ? frame.publicUrl
+        : `${EXTERNAL_BASE_URL.replace( /\/$/, '' )}/${frame.publicUrl.replace( /^\//, '' )}`;
+
+      // Use externalFetch (with Authorization header) only when the image is
+      // on the same origin as the booth API.  Cross-origin URLs (CDN, cloud
+      // storage) use plain fetch so the bearer token isn't leaked to a third
+      // party that may reject it.
+      const isSameOrigin = imageUrl.startsWith(
+        EXTERNAL_BASE_URL.replace( /\/$/, '' ),
+      );
+
+      // eslint-disable-next-line no-console
+      console.log( `Fetching frame image for "${key}" from ${imageUrl} (sameOrigin=${isSameOrigin})` )
+
+      const fetcher = isSameOrigin ? externalFetch : fetch
+      const res = await fetcher( imageUrl );
+      if ( !res.ok ) {
+        throw new Error(
+          `Failed to fetch frame image for "${key}" from ${imageUrl}: ${res.status} ${res.statusText}`,
+        )
+      }
       buffer = Buffer.from( await res.arrayBuffer() );
     }
 
@@ -164,6 +189,8 @@ export async function GET( request: Request ) {
       },
     } )
   } catch ( e ) {
+    console.log( e )
+    
     return Response.json(
       { error : e instanceof Error ? e.message : 'Failed to generate preview' },
       { status : 500 },

@@ -26,10 +26,10 @@ export type Status = {
 
 /** Idle timeout per step (seconds). Based on photobooth industry standards. */
 export const STEP_TIMEOUTS: Record<number, number> = {
-  0 : 30,   // Select Frame — 30s idle
-  1 : 120,  // Capture — 2min idle
-  2 : 60,   // Filter — 60s idle
-  3 : 60,   // Result — 60s idle
+  0 : 30,   // Select Frame — 30s idle, then jump to capture
+  1 : 30,   // Capture — 30s per slot, auto-capture on timeout
+  2 : 15,   // Filter — 45s idle, then compose & go to result
+  3 : 60,   // Result — 60s idle, then reset to home
 };
 
 /** Show "Are you still there?" warning this many seconds before auto-reset. */
@@ -87,6 +87,10 @@ export interface BoothState {
   /** Seconds remaining on the current step timer. */
   timerSecondsLeft: number | null;
 
+  // ── Filter ─────────────────────────────────────────
+  /** Currently selected global filter on the filter step. */
+  globalFilter: string;
+
   // ── Actions ────────────────────────────────────────
   setStatus: ( status: Status | null ) => void;
   setFrames: ( frames: ClientFrame[] ) => void;
@@ -108,6 +112,7 @@ export interface BoothState {
   setTimerEnabled: ( enabled: boolean ) => void;
   setTimerSecondsLeft: ( seconds: number | null ) => void;
   resetTimer: () => void;
+  setGlobalFilter: ( filter: string ) => void;
   setPayment: ( payment: Partial<Pick<BoothState, 'paymentStatus' | 'paymentOrderId' | 'paymentQrCodeUrl' | 'paymentDeeplinkUrl'>> ) => void;
 }
 
@@ -156,6 +161,7 @@ export const useBoothStore = create<BoothState>()(
       step             : 0,
       timerEnabled     : true,
       timerSecondsLeft : null,
+      globalFilter     : 'none',
 
       // Payment
       paymentStatus      : '' as const,
@@ -352,6 +358,9 @@ export const useBoothStore = create<BoothState>()(
         const timeout = STEP_TIMEOUTS[step] ?? 30;
         set( { timerSecondsLeft : timeout } );
       },
+
+      // ── Filter ─────────────────────────────────────
+      setGlobalFilter : ( filter ) => set( { globalFilter : filter } ),
 
       // ── Payment ────────────────────────────────────
       setPayment : ( payment ) => set( payment ),

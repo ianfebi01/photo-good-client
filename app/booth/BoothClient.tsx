@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { useQuery } from '@tanstack/react-query'
 import { Loader2, AlertCircle } from 'lucide-react'
@@ -34,8 +34,64 @@ const STEP_COMPONENTS: Record<number, React.ComponentType> = {
 // ── Main component ─────────────────────────────────────────────────
 
 export function BoothClient() {
-  const { step, setStatus, setFrames, restartPreview, paymentStatus } = useBoothStore()
+  const {
+    step, setStatus, setFrames, restartPreview, paymentStatus,
+    reset, start, goToFilter, takeShot, acceptPending,
+    composeStripWithAdjustments, photos,
+  } = useBoothStore()
   const router = useRouter()
+
+  // ── Timer expiry handler ────────────────────────────────────────
+  const handleTimesUp = useCallback( () => {
+    // Read latest state for step-1 decisions (pending / photo count)
+    const state = useBoothStore.getState()
+
+    switch ( state.step ) {
+    case 0:
+      // Select Frame idle timeout → jump straight to capture
+      start()
+      break
+
+    case 1: {
+      // Capture — auto-capture or advance
+      const frame = state.frames.find( ( f ) => f.key === state.frameKey ) ?? state.frames[0]
+      const photoCount = frame?.photoCount ?? 0
+
+      if ( state.pending ) {
+        // A shot is waiting for review — auto-accept it
+        acceptPending()
+      } else if ( state.photos.length < photoCount ) {
+        // Still have empty slots — auto-capture
+        takeShot()
+      } else {
+        // All slots filled — go to filter
+        goToFilter()
+      }
+      break
+    }
+
+    case 2: {
+      // Filter idle timeout — compose with current filter and advance to result
+      const frame = state.frames.find( ( f ) => f.key === state.frameKey ) ?? state.frames[0]
+      const count = frame?.photoCount ?? 0
+      const filter = state.globalFilter ?? 'none'
+      const defaults = Array.from( { length : count } ).map( () => ( {
+        x      : 0,
+        y      : 0,
+        zoom   : 1.0,
+        filter : filter,
+      } ) )
+      composeStripWithAdjustments( defaults )
+      break
+    }
+
+    case 3:
+    default:
+      // Result idle timeout → back to home
+      reset()
+      router.replace( '/booth' )
+    }
+  }, [start, acceptPending, takeShot, goToFilter, composeStripWithAdjustments, reset, router] )
 
   // Override body bg + theme-color for iOS Safari bars.
   useBodyBackground( '#f5f5f5' )
@@ -149,7 +205,10 @@ export function BoothClient() {
       <div className="h-screen xl:min-h-[unset] xl:h-screen overflow-hidden flex flex-col">
         {/* Timer indicator in the top-right corner */}
         <div className="absolute top-4 right-4 z-40">
-          <StepTimer />
+          <StepTimer
+            onTimesUp={handleTimesUp}
+            resetKey={step === 1 ? photos.length : undefined}
+          />
         </div>
 
         {StepComponent && <StepComponent />}

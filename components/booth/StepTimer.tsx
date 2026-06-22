@@ -1,26 +1,30 @@
 'use client'
 
 import { useEffect, useCallback, useRef } from 'react'
-import { useRouter } from 'next/navigation'
 import { useBoothStore, STEP_TIMEOUTS, TIMEOUT_WARNING_SECONDS } from '@/store/boothStore'
 import { cn } from '@/lib/utils'
+
+export interface StepTimerProps {
+  /** Called when the step timer reaches zero. */
+  onTimesUp?: () => void
+  /** Changing this value resets the timer (e.g. per-slot capture counter). */
+  resetKey?: string | number
+}
 
 /**
  * Idle timer for the photobooth kiosk mode.
  * Resets to the configured timeout for the current step whenever the user
- * interacts (click, touch, keydown). When time runs out, auto-resets to step 0.
+ * interacts (click, touch, keydown). When time runs out, calls onTimesUp.
  * Shows a warning overlay 5 seconds before auto-reset.
  */
-export function StepTimer() {
+export function StepTimer( { onTimesUp, resetKey }: StepTimerProps = {} ) {
   const {
     step,
     timerEnabled,
     timerSecondsLeft,
     setTimerSecondsLeft,
-    reset,
   } = useBoothStore()
 
-  const router = useRouter()
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>( null )
 
   const resetTimer = useCallback( () => {
@@ -28,11 +32,11 @@ export function StepTimer() {
     setTimerSecondsLeft( timeout )
   }, [step, setTimerSecondsLeft] )
 
-  // Start / restart timer when step changes
+  // Start / restart timer when step changes or resetKey changes
   useEffect( () => {
     if ( !timerEnabled ) return
     resetTimer()
-  }, [step, timerEnabled, resetTimer] )
+  }, [step, resetKey, timerEnabled, resetTimer] )
 
   // Tick the timer every second
   useEffect( () => {
@@ -43,9 +47,9 @@ export function StepTimer() {
       if ( current === null ) return
 
       if ( current <= 1 ) {
-        // Time's up — auto-reset and go to payment
-        reset()
-        router.replace( '/booth/payment' )
+        // Time's up — stop timer and call the provided callback
+        setTimerSecondsLeft( null )
+        onTimesUp?.()
       } else {
         setTimerSecondsLeft( current - 1 )
       }
@@ -54,26 +58,7 @@ export function StepTimer() {
     return () => {
       if ( intervalRef.current ) clearInterval( intervalRef.current )
     }
-  }, [timerEnabled, timerSecondsLeft, setTimerSecondsLeft, reset, router] )
-
-  // Reset timer on user interaction
-  useEffect( () => {
-    if ( !timerEnabled ) return
-
-    const onInteraction = () => resetTimer()
-
-    window.addEventListener( 'click', onInteraction )
-    window.addEventListener( 'touchstart', onInteraction )
-    window.addEventListener( 'keydown', onInteraction )
-    window.addEventListener( 'mousemove', onInteraction )
-
-    return () => {
-      window.removeEventListener( 'click', onInteraction )
-      window.removeEventListener( 'touchstart', onInteraction )
-      window.removeEventListener( 'keydown', onInteraction )
-      window.removeEventListener( 'mousemove', onInteraction )
-    }
-  }, [timerEnabled, resetTimer] )
+  }, [timerEnabled, timerSecondsLeft, setTimerSecondsLeft, onTimesUp] )
 
   if ( !timerEnabled || timerSecondsLeft === null ) return null
 
@@ -129,53 +114,6 @@ export function StepTimer() {
           {timerSecondsLeft}s
         </span>
       </div>
-
-      {/* Warning overlay */}
-      {showWarning && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm animate-in fade-in duration-200 pointer-events-none">
-          <div className="flex flex-col items-center gap-4 bg-white rounded-3xl px-10 py-8 shadow-2xl pointer-events-auto animate-in zoom-in-95 duration-300">
-            <div className="relative size-20 flex items-center justify-center">
-              <svg
-                className="size-20 -rotate-90"
-                viewBox="0 0 80 80"
-              >
-                <circle
-                  cx="40"
-                  cy="40"
-                  r="36"
-                  fill="none"
-                  stroke="#fee2e2"
-                  strokeWidth="4"
-                />
-                <circle
-                  cx="40"
-                  cy="40"
-                  r="36"
-                  fill="none"
-                  stroke="#ef4444"
-                  strokeWidth="4"
-                  strokeLinecap="round"
-                  strokeDasharray={2 * Math.PI * 36}
-                  strokeDashoffset={2 * Math.PI * 36 * ( 1 - timerSecondsLeft / TIMEOUT_WARNING_SECONDS )}
-                  className="transition-all duration-1000 ease-linear"
-                />
-              </svg>
-              <span className="absolute text-2xl font-black text-red-500 tabular-nums">
-                {timerSecondsLeft}
-              </span>
-            </div>
-            <div className="text-center">
-              <h3 className="text-lg font-bold text-neutral-900">Are you still there?</h3>
-              <p className="text-sm text-neutral-500 mt-1">
-                Session will reset in {timerSecondsLeft} second{timerSecondsLeft !== 1 ? 's' : ''}
-              </p>
-            </div>
-            <p className="text-xs text-neutral-400">
-              Touch anywhere to continue
-            </p>
-          </div>
-        </div>
-      )}
     </>
   )
 }

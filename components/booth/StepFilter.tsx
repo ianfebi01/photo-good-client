@@ -14,13 +14,14 @@ export function StepFilter() {
     frames,
     composeStripWithAdjustments,
     phase,
+    globalFilter,
+    setGlobalFilter,
   } = useBoothStore()
 
   const frame = frames.find( ( f ) => f.key === frameKey ) ?? frames[0]
   const photoCount = frame?.photoCount ?? 0
   const busy = phase === 'composing'
 
-  const [globalFilter, setGlobalFilter] = useState<string>( 'none' )
   const [cacheBuster] = useState( () => String( Date.now() ) )
 
   const [adjustments] = useState<

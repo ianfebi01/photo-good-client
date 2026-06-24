@@ -208,12 +208,12 @@ export const useBoothStore = create<BoothState>()(
         const { frames } = get();
         set( {
           ...freshSessionState(),
-          frameKey           : frames[0]?.key ?? DEFAULT_FRAME_KEY,
-          flash              : false,
-          streamKey          : newId(),
-          step               : 0,
-          timerSecondsLeft   : null,
-          resultSynced       : false,
+          frameKey         : frames[0]?.key ?? DEFAULT_FRAME_KEY,
+          flash            : false,
+          streamKey        : newId(),
+          step             : 0,
+          timerSecondsLeft : null,
+          resultSynced     : false,
         } );
       },
 

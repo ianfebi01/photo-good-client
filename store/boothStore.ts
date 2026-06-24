@@ -213,10 +213,6 @@ export const useBoothStore = create<BoothState>()(
           streamKey          : newId(),
           step               : 0,
           timerSecondsLeft   : null,
-          paymentStatus      : 'idle',
-          paymentOrderId     : null,
-          paymentQrCodeUrl   : null,
-          paymentDeeplinkUrl : null,
           resultSynced       : false,
         } );
       },

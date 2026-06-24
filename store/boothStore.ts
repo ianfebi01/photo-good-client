@@ -132,6 +132,7 @@ function freshSessionState(): Partial<BoothState> {
     loopVideoUrl   : null,
     countdownClips : [],
     error          : null,
+    globalFilter   : 'none',
   };
 }
 

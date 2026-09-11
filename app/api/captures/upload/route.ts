@@ -2,7 +2,7 @@ import { writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 
 import { CAPTURES_DIR } from "@/lib/photobooth/config";
-import { saveRawCopy } from "@/lib/photobooth/media";
+import { convertCountdownToMp4, saveRawCopy } from "@/lib/photobooth/media";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -59,11 +59,16 @@ export async function POST( request: Request ) {
     const buffer = Buffer.from( await file.arrayBuffer() );
 
     if ( isVideo ) {
-      // Countdown video clip
-      const name = `countdown-${sessionId}-${index}.webm`;
-      await writeFile( path.join( CAPTURES_DIR, name ), buffer );
+      // Countdown video clip — save as webm then convert to MP4
+      const webmName = `countdown-${sessionId}-${index}.webm`;
+      await writeFile( path.join( CAPTURES_DIR, webmName ), buffer );
 
-      return Response.json( { file : name, url : `/captures/${name}` } );
+      // Auto-convert to H.264 MP4 so it plays everywhere (Safari, iOS, etc.)
+      const mp4 = await convertCountdownToMp4( webmName );
+
+      return Response.json(
+        mp4 ?? { file : webmName, url : `/captures/${webmName}` },
+      );
     }
 
     // Photo — save the main shot and an immutable raw copy

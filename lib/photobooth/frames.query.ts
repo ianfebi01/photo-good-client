@@ -275,7 +275,7 @@ export async function generateSessionLoopVideo( {
   return parseJson( response, 'Loop video generation failed' )
 }
 
-/** Upload a countdown video clip (webm) recorded during the 3s countdown. */
+/** Upload a countdown video clip recorded during the 3s countdown. */
 export async function uploadCountdownClip( {
   sessionId,
   index,

@@ -8,7 +8,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const FILE_RE = /^shot-[a-z0-9]+-\d+\.jpg$/i;
-const COUNTDOWN_RE = /^countdown-[a-z0-9]+-\d+\.webm$/i;
+const COUNTDOWN_RE = /^countdown-[a-z0-9]+-\d+\.(webm|mp4)$/i;
 const ID_RE = /^[a-z0-9]+$/i;
 
 /**
@@ -20,7 +20,7 @@ const ID_RE = /^[a-z0-9]+$/i;
  * Body (JSON):
  *   - sessionId:      the booth session identifier
  *   - files:          ordered list of shot filenames (for slideshow)
- *   - countdownFiles: ordered list of countdown .webm filenames (for mashup)
+ *   - countdownFiles: ordered list of countdown clip filenames (for mashup)
  *   - frameKey:       frame identifier (required for countdown mashup)
  */
 export async function POST( request: Request ) {

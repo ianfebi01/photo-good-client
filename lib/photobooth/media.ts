@@ -231,7 +231,7 @@ export async function generateSlideshowVideo(
 // ── Countdown video mashup onto frame ─────────────────────────────
 
 /**
- * Overlay each countdown .webm clip into its corresponding slot on the
+ * Overlay each countdown clip (webm or mp4) into its corresponding slot on the
  * frame image, producing a single combined MP4. Each clip is scaled to
  * fit its slot rect; the output is as long as the shortest clip.
  */

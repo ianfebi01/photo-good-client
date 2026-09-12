@@ -93,7 +93,7 @@ export function StepFilter() {
             <span className="font-sans text-sm font-bold text-neutral-800">
               Apply Filter
             </span>
-            <span className="font-sans text-xs text-neutral-400">
+            <span className="font-sans text-xs text-neutral-400 font-jakarta">
               Choose a filter style for your photos
             </span>
           </div>

@@ -464,7 +464,7 @@ export function StepCapture() {
             <span className="text-sm font-bold text-neutral-800 font-sans">
               Capture Photos
             </span>
-            <span className="text-xs text-neutral-400 font-sans">
+            <span className="text-xs text-neutral-400 font-jakarta">
               {photos.length}/{photoCount} shots taken
             </span>
           </div>

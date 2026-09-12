@@ -23,7 +23,7 @@ export function StepSelectFrame() {
           <span className="text-sm font-bold text-neutral-800 font-sans">
             Select Frame Template
           </span>
-          <span className="text-xs text-neutral-400 font-sans">
+          <span className="text-xs text-neutral-400 font-jakarta">
             Choose a 4×6 frame to start your session
           </span>
         </div>
@@ -65,7 +65,7 @@ export function StepSelectFrame() {
           </div>
         </div>
       ) : (
-        <div className="flex flex-col lg:grid lg:grid-cols-[1fr_1.5fr] gap-6 grow min-h-0 overflow-hidden">
+        <div className="flex flex-col lg:grid lg:grid-cols-[1fr_1.5fr] gap-6 grow min-h-0 overflow-hidden font-jakarta">
           {/* Left: Selected frame preview */}
           <div className="flex flex-col items-center justify-center min-h-0 lg:h-full">
             {frame ? (
@@ -93,7 +93,7 @@ export function StepSelectFrame() {
           </div>
 
           {/* Right: Frame grid */}
-          <div className="flex flex-col gap-3 min-h-0 overflow-hidden">
+          <div className="flex flex-col gap-3 min-h-0 overflow-hidden font-jakarta">
             <span className="text-xs font-bold text-neutral-500 uppercase tracking-wider shrink-0">
               Available frames ({frames.length})
             </span>

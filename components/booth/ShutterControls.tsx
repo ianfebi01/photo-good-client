@@ -59,7 +59,7 @@ export function ShutterControls( {
       ) : adjusting ? (
         <div
           key="adjusting"
-          className="flex flex-col items-center justify-center h-full w-full relative z-10 gap-4 animate-in fade-in zoom-in-95 duration-300"
+          className="flex flex-col items-center justify-center h-full w-full relative z-10 gap-4 animate-in fade-in zoom-in-95 duration-300 font-jakarta"
         >
           <span className="text-[10px] font-black text-emerald-500 uppercase tracking-wider font-sans">
             Complete!
@@ -87,9 +87,9 @@ export function ShutterControls( {
       ) : (
         <div
           key="capture"
-          className="flex flex-col items-center justify-center h-full w-full relative z-10 gap-4 animate-in fade-in zoom-in-95 duration-300"
+          className="flex flex-col items-center justify-center h-full w-full relative z-10 gap-4 animate-in fade-in zoom-in-95 duration-300 font-jakarta"
         >
-          <span className="text-[9px] font-bold text-neutral-400 uppercase tracking-widest font-sans">
+          <span className="text-[9px] font-bold text-neutral-400 uppercase tracking-widest">
             {photosTaken}/{photoCount} Shots
           </span>
 

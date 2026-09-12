@@ -14,6 +14,7 @@ import { useBoothStore } from '@/store/boothStore'
 import { CameraPreview } from './CameraPreview'
 import { FramePreview } from './FramePreview'
 import { ShutterControls } from './ShutterControls'
+import { StepHeader } from './StepHeader'
 import { getCameraPreviewUrl } from '@/lib/photobooth/frames.query'
 import { uploadCountdownClip } from '@/lib/photobooth/frames.query'
 import { ChevronRight } from 'lucide-react'
@@ -458,26 +459,20 @@ export function StepCapture() {
   return (
     <div className="container mx-auto px-4 py-8 lg:py-16 flex flex-col gap-6 grow overflow-visible">
       {/* Header */}
-      <div className="flex justify-between items-center gap-4">
-        <div className="flex items-center gap-3">
-          <div className="flex flex-col">
-            <span className="text-sm font-bold text-neutral-800 font-sans">
-              Capture Photos
-            </span>
-            <span className="text-xs text-neutral-400 font-jakarta">
-              {photos.length}/{photoCount} shots taken
-            </span>
-          </div>
-        </div>
-        {adjusting && (
-          <Button
-            size="lg"
-            onClick={handleGoToFilter}
-          >
-            Next <ChevronRight />
-          </Button>
-        )}
-      </div>
+      <StepHeader
+        title="Capture Photos"
+        subtitle={`${photos.length}/${photoCount} shots taken`}
+        actions={
+          adjusting && (
+            <Button
+              size="lg"
+              onClick={handleGoToFilter}
+            >
+              Next <ChevronRight />
+            </Button>
+          )
+        }
+      />
 
       {/* 2-column layout: camera + trigger | frame preview */}
       <div className="flex flex-col lg:grid lg:grid-cols-2 gap-6 grow min-h-0 overflow-visible">

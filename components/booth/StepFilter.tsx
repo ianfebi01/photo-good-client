@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { useBoothStore } from '@/store/boothStore'
 import { FilterPicker } from './FilterPicker'
 import { FramePreview } from './FramePreview'
+import { StepHeader } from './StepHeader'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 
 export function StepFilter() {
@@ -78,8 +79,10 @@ export function StepFilter() {
   return (
     <div className="container flex flex-col gap-6 px-4 py-8 mx-auto overflow-hidden lg:py-16 grow">
       {/* Header */}
-      <div className="flex items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
+      <StepHeader
+        title="Apply Filter"
+        subtitle="Choose a filter style for your photos"
+        leading={
           <Button
             variant="ghost"
             size="sm"
@@ -89,23 +92,17 @@ export function StepFilter() {
           >
             <ChevronLeft className="size-4" />
           </Button>
-          <div className="flex flex-col">
-            <span className="font-sans text-sm font-bold text-neutral-800">
-              Apply Filter
-            </span>
-            <span className="font-sans text-xs text-neutral-400 font-jakarta">
-              Choose a filter style for your photos
-            </span>
-          </div>
-        </div>
-        <Button
-          size="lg"
-          onClick={handleCompose}
-          disabled={busy}
-        >
-          {busy ? 'Composing...' : 'Finish'} <ChevronRight />
-        </Button>
-      </div>
+        }
+        actions={
+          <Button
+            size="lg"
+            onClick={handleCompose}
+            disabled={busy}
+          >
+            {busy ? 'Composing...' : 'Finish'} <ChevronRight />
+          </Button>
+        }
+      />
 
       {/* 2-column: preview + filters */}
       <div className="flex flex-col lg:grid lg:grid-cols-[1fr_1.2fr] gap-6 grow min-h-0 overflow-hidden">
@@ -141,7 +138,7 @@ export function StepFilter() {
               <p className="text-xs font-bold tracking-widest uppercase text-primary">
                 Choose your style
               </p>
-              <h2 className="text-2xl font-bold text-foreground">
+              <h2 className="text-2xl font-bold text-foreground font-jakarta">
                 Filters
               </h2>
             </div>

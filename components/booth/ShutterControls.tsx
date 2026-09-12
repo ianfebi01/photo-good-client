@@ -1,5 +1,7 @@
 import { CheckIcon, RotateCcw } from 'lucide-react'
 
+import { cn } from '@/lib/utils'
+
 interface ShutterControlsProps {
   reviewing: boolean
   adjusting: boolean
@@ -7,6 +9,8 @@ interface ShutterControlsProps {
   photosTaken: number
   photoCount: number
   countdown: number | null
+  /** Booth setting — hide the "photo X of Y" counter above the shutter. */
+  captureCounterEnabled: boolean
   onRetake: () => void
   onAccept: () => void
   onCompose: () => void
@@ -20,6 +24,7 @@ export function ShutterControls( {
   photosTaken,
   photoCount,
   countdown,
+  captureCounterEnabled,
   onRetake,
   onAccept,
   onCompose,
@@ -89,7 +94,13 @@ export function ShutterControls( {
           key="capture"
           className="flex flex-col items-center justify-center h-full w-full relative z-10 gap-4 animate-in fade-in zoom-in-95 duration-300 font-jakarta"
         >
-          <span className="text-[9px] font-bold text-neutral-400 uppercase tracking-widest">
+          <span
+            className={cn(
+              'text-[9px] font-bold text-neutral-400 uppercase tracking-widest',
+              // Keep the slot so hiding the counter doesn't shift the shutter.
+              !captureCounterEnabled && 'invisible',
+            )}
+          >
             {photosTaken}/{photoCount} Shots
           </span>
 

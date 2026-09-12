@@ -7,6 +7,7 @@ import { Loader2, AlertCircle, CheckCircle2, ExternalLink, X } from 'lucide-reac
 import { Button } from '@/components/ui/button'
 import { useBoothStore } from '@/store/boothStore'
 import { usePaymentPolling } from '@/lib/hooks/usePaymentPolling'
+import { useBoothSettings } from '@/lib/hooks/useBoothSettings'
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -120,11 +121,24 @@ export function PaymentClient() {
 
   const creatingRef = useRef( false )
 
+  // ── Per-booth settings ─────────────────────────────────────────
+  const settingsQuery = useBoothSettings()
+
   // ── Hydrate from persisted store after mount ───────────────────
+  // Gated on settings: reaching the 'idle' phase auto-creates a charge, so a
+  // booth with payment turned off must bail out before that happens.
   useEffect( () => {
+    if ( settingsQuery.isPending ) return
+
+    if ( settingsQuery.data && !settingsQuery.data.paymentEnabled ) {
+      router.replace( '/booth' )
+
+      return
+    }
+
     const resolved = resolveInitialPhase()
     dispatch( { type : 'HYDRATE', phase : resolved.phase, charge : resolved.charge } )
-  }, [] )
+  }, [settingsQuery.isPending, settingsQuery.data, router] )
 
   // ── Poll while pending ─────────────────────────────────────────
   const pollResult = usePaymentPolling(

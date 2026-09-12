@@ -73,6 +73,7 @@ export function StepCapture() {
     takeShot,
     goToFilter,
     disableCountdown,
+    settings,
   } = useBoothStore()
 
   const frame = frames.find( ( f ) => f.key === frameKey ) ?? frames[0]
@@ -446,6 +447,7 @@ export function StepCapture() {
       photosTaken={photos.length}
       photoCount={photoCount}
       countdown={countdown}
+      captureCounterEnabled={settings?.captureCounterEnabled ?? true}
       onRetake={handleRetake}
       onAccept={handleAcceptPending}
       onCompose={handleGoToFilter}

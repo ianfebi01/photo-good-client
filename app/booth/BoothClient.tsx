@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useCallback } from 'react'
+import { useEffect, useRef, useCallback, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { useQuery } from '@tanstack/react-query'
 import { Loader2, AlertCircle } from 'lucide-react'
@@ -21,6 +21,7 @@ import { StepSelectFrame } from '@/components/booth/StepSelectFrame'
 import { StepFilter } from '@/components/booth/StepFilter'
 import { StepTimer } from '@/components/booth/StepTimer'
 import { useBodyBackground } from '@/lib/hooks/useBodyBackground'
+import { useBoothSettings } from '@/lib/hooks/useBoothSettings'
 
 // ── Step component map ────────────────────────────────────────────
 
@@ -37,7 +38,7 @@ export function BoothClient() {
   const {
     step, setStatus, setFrames, restartPreview, paymentStatus,
     reset, start, goToFilter, takeShot, acceptPending,
-    composeStripWithAdjustments, photos,
+    composeStripWithAdjustments, photos, frameKey, selectFrame, settings,
   } = useBoothStore()
   const router = useRouter()
 
@@ -96,12 +97,19 @@ export function BoothClient() {
   // Override body bg + theme-color for iOS Safari bars.
   useBodyBackground( '#f5f5f5' )
 
+  // ── Per-booth settings ──────────────────────────────────────────
+  // While these are loading the store keeps `settings === null`, so the
+  // payment guard below waits instead of guessing a default.
+  useBoothSettings()
+
   // ── Payment guard: redirect if not paid ─────────────────────────
   useEffect( () => {
+    if ( !settings ) return
+    if ( !settings.paymentEnabled ) return
     if ( paymentStatus !== 'paid' ) {
       router.replace( '/booth/payment' )
     }
-  }, [paymentStatus, router] )
+  }, [settings, paymentStatus, router] )
 
   // ── Camera discovery (fire-and-forget, guarded against unmount) ─
   useEffect( () => {
@@ -122,16 +130,36 @@ export function BoothClient() {
     staleTime : 1000 * 60,
   } )
 
+  // Apply the booth deny-list client-side as well. `/api/frames` is served
+  // from the locally-synced manifest first, which bypasses the API's own
+  // filtering and can go stale when a frame is disabled in the backend.
+  const visibleFrames = useMemo( () => {
+    const all = framesQuery.data?.frames
+    if ( !Array.isArray( all ) ) return null
+    const disabled = new Set( settings?.disabledFrameKeys ?? [] )
+
+    return all.filter( ( f ) => !disabled.has( f.key ) )
+  }, [framesQuery.data, settings?.disabledFrameKeys] )
+
   const lastFramesRef = useRef<ClientFrame[] | null>( null )
 
   useEffect( () => {
-    const frames = framesQuery.data?.frames
-    if ( !Array.isArray( frames ) ) return
+    if ( !visibleFrames ) return
     // Only sync to store when the array identity changes
-    if ( frames === lastFramesRef.current ) return
-    lastFramesRef.current = frames
-    setFrames( frames )
-  }, [framesQuery.data, setFrames] )
+    if ( visibleFrames === lastFramesRef.current ) return
+    lastFramesRef.current = visibleFrames
+    setFrames( visibleFrames )
+  }, [visibleFrames, setFrames] )
+
+  // ── Skip the frame picker when there is only one choice ─────────
+  useEffect( () => {
+    if ( step !== 0 ) return
+    if ( !visibleFrames || visibleFrames.length !== 1 ) return
+
+    const only = visibleFrames[0]
+    if ( only.key !== frameKey ) selectFrame( only.key )
+    start()
+  }, [step, visibleFrames, frameKey, selectFrame, start] )
 
   // ── Camera status query ─────────────────────────────────────────
   const statusQuery = useQuery( {
@@ -166,8 +194,11 @@ export function BoothClient() {
     }
   }, [statusQuery.data, statusQuery.isError, setStatus, restartPreview] )
 
+  // ── Wait for settings before deciding anything ─────────────────
+  if ( !settings ) return null
+
   // ── Don't render booth steps if payment guard hasn't passed ─────
-  if ( paymentStatus !== 'paid' ) return null
+  if ( settings.paymentEnabled && paymentStatus !== 'paid' ) return null
 
   // ── Frames loading / error state ────────────────────────────────
   if ( framesQuery.isLoading && step === 0 ) {

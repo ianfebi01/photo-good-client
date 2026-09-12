@@ -22,6 +22,37 @@ export type BoothFramesResponse = {
   frames : BoothFrame[]
 }
 
+// ── Client settings ───────────────────────────────────────────────
+
+/**
+ * Per-booth settings the booth client fetches on startup.
+ *
+ * These only control which steps the client renders — they never disable the
+ * underlying APIs, so a request still succeeds even when its step is hidden.
+ */
+export type BoothClientSettings = {
+  /** Show the payment step before a session starts. */
+  paymentEnabled : boolean
+  /**
+   * Frame keys hidden from this booth. An empty list means every frame is
+   * available, including frames uploaded after this response was fetched.
+   *
+   * `GET /api/booth/frames` already filters the catalog by this list, so the
+   * client can render whatever it receives without applying the deny-list
+   * itself. Skip the frame picker when fewer than two frames come back.
+   */
+  disabledFrameKeys : string[]
+  /** Show the countdown timer before each capture. */
+  timerEnabled : boolean
+  /** Show the "photo X of Y" capture counter. */
+  captureCounterEnabled : boolean
+}
+
+/** GET /api/booth/settings response. */
+export type BoothSettingsResponse = {
+  settings : BoothClientSettings
+}
+
 // ── Media upload ──────────────────────────────────────────────────
 
 /** POST /api/booth/media response. */

@@ -7,6 +7,7 @@ import {
   FALLBACK_FRAMES,
 } from "@/lib/photobooth/frames.client";
 import { captureShot, composeStrip } from "@/lib/photobooth/frames.query";
+import type { BoothClientSettings } from "@/types/booth";
 
 export type Shot = { file: string; url: string };
 export type Phase =
@@ -89,6 +90,17 @@ export interface BoothState {
   /** Kiosk config: skip the 3-2-1 shutter countdown and capture instantly. */
   disableCountdown: boolean;
 
+  // ── Per-booth settings (transient) ─────────────────
+  /**
+   * Client settings fetched from `GET /api/booth/settings`. Refetched on every
+   * load, so this is never persisted.
+   *
+   * `null` means "not resolved yet" — consumers must not guess a value, since
+   * guessing `paymentEnabled: true` would bounce a payment-free booth to the
+   * payment page before the request settles.
+   */
+  settings: BoothClientSettings | null;
+
   // ── Filter ─────────────────────────────────────────
   /** Currently selected global filter on the filter step. */
   globalFilter: string;
@@ -114,6 +126,7 @@ export interface BoothState {
   setTimerEnabled: ( enabled: boolean ) => void;
   setTimerSecondsLeft: ( seconds: number | null ) => void;
   setDisableCountdown: ( disabled: boolean ) => void;
+  setSettings: ( settings: BoothClientSettings ) => void;
   resetTimer: () => void;
   setGlobalFilter: ( filter: string ) => void;
   setPayment: ( payment: Partial<Pick<BoothState, 'paymentStatus' | 'paymentOrderId' | 'paymentQrCodeUrl' | 'paymentDeeplinkUrl'>> ) => void;
@@ -166,6 +179,7 @@ export const useBoothStore = create<BoothState>()(
       timerEnabled     : false,
       timerSecondsLeft : null,
       disableCountdown : true,
+      settings         : null,
       globalFilter     : 'none',
 
       // Payment
@@ -355,7 +369,15 @@ export const useBoothStore = create<BoothState>()(
       setTimerEnabled     : ( enabled ) => set( { timerEnabled : enabled } ),
       setTimerSecondsLeft : ( seconds ) => set( { timerSecondsLeft : seconds } ),
       setDisableCountdown : ( disabled ) => set( { disableCountdown : disabled } ),
-      resetTimer          : () => {
+
+      // ── Per-booth settings ─────────────────────────
+      // The server owns the idle step timer toggle, so mirror it here.
+      setSettings : ( settings ) => set( {
+        settings,
+        timerEnabled : settings.timerEnabled,
+      } ),
+
+      resetTimer : () => {
         const { step } = get();
         const timeout = STEP_TIMEOUTS[step] ?? 30;
         set( { timerSecondsLeft : timeout } );

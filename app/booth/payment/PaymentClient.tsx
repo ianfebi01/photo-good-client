@@ -296,12 +296,12 @@ export function PaymentClient() {
             <h2 className="text-3xl font-bold tracking-tight lg:text-4xl text-foreground">
               Scan to Start
             </h2>
-            <p className="max-w-md mx-auto text-sm text-muted-foreground lg:text-base">
+            <p className="max-w-md mx-auto text-sm text-muted-foreground lg:text-base font-jakarta">
               Pay with QRIS via GoPay or any e-wallet to begin your photo session.
             </p>
           </div>
 
-          <div className="flex flex-col items-center gap-6">
+          <div className="flex flex-col items-center gap-6 font-jakarta">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={charge.qrCodeUrl}
@@ -391,7 +391,7 @@ export function PaymentClient() {
         <X className="size-16 text-red-500" />
         <div className="text-center">
           <h3 className="text-xl font-bold text-red-600">No Payment Detected</h3>
-          <p className="text-sm text-muted-foreground mt-1">
+          <p className="text-sm text-muted-foreground mt-1 font-jakarta">
             Please complete the payment to continue.
           </p>
         </div>

@@ -190,12 +190,12 @@ export function StepResult() {
         <h2 className="text-3xl font-bold tracking-tight lg:text-4xl text-foreground">
           Your photos are ready!
         </h2>
-        <p className="max-w-md mx-auto text-sm text-muted-foreground lg:text-base">
+        <p className="max-w-md mx-auto text-sm text-muted-foreground lg:text-base font font-jakarta">
           Download your photo strip, countdown mashup, or 15-second loop
           video below.
         </p>
       </div>
-      <div className=''>
+      <div className='font-jakarta'>
         {/* ── Video generation status ──────────────────────────────── */}
         <VideoGenBadges
           videoStatus={videoStatus}

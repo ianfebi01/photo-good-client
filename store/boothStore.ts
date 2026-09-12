@@ -210,7 +210,7 @@ export const useBoothStore = create<BoothState>()(
     step             : 0,
     timerEnabled     : false,
     timerSecondsLeft : null,
-    disableCountdown : true,
+    disableCountdown : false,
     settings         : null,
     globalFilter     : 'none',
     adjustments      : createDefaultAdjustments(),

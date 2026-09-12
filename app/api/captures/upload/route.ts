@@ -1,8 +1,12 @@
-import { writeFile, mkdir } from "node:fs/promises";
+import { writeFile, mkdir, unlink } from "node:fs/promises";
 import path from "node:path";
 
 import { CAPTURES_DIR } from "@/lib/photobooth/config";
-import { convertCountdownToMp4, saveRawCopy } from "@/lib/photobooth/media";
+import {
+  convertCountdownToMp4,
+  saveRawCopy,
+  videoFrameCount,
+} from "@/lib/photobooth/media";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -61,7 +65,20 @@ export async function POST( request: Request ) {
     if ( isVideo ) {
       // Countdown video clip — save as webm then convert to MP4
       const webmName = `countdown-${sessionId}-${index}.webm`;
-      await writeFile( path.join( CAPTURES_DIR, webmName ), buffer );
+      const webmPath = path.join( CAPTURES_DIR, webmName );
+      await writeFile( webmPath, buffer );
+
+      // Reject a recording that captured no usable frames (the canvas had not
+      // painted yet). It would encode to an empty MP4 that then breaks the
+      // countdown mashup, so tell the client to drop the clip instead.
+      if ( await videoFrameCount( webmPath ) < 2 ) {
+        await unlink( webmPath ).catch( () => {} );
+
+        return Response.json(
+          { error : 'Countdown recording contained no usable frames' },
+          { status : 422 },
+        );
+      }
 
       // Auto-convert to H.264 MP4 so it plays everywhere (Safari, iOS, etc.)
       const mp4 = await convertCountdownToMp4( webmName );

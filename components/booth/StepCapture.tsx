@@ -20,10 +20,9 @@ import { uploadCountdownClip } from '@/lib/photobooth/frames.query'
 import { ChevronRight } from 'lucide-react'
 
 /** Draw the live MJPEG img onto a canvas every frame so we can record it. */
-function useRecordingCanvas(
-  active: boolean,
-): React.RefObject<HTMLCanvasElement | null> {
+function useRecordingCanvas( active: boolean ) {
   const canvasRef = useRef<HTMLCanvasElement | null>( null )
+  const paintedRef = useRef( false )
   const rafRef = useRef<number | null>( null )
 
   useEffect( () => {
@@ -42,9 +41,17 @@ function useRecordingCanvas(
         'img[data-photobooth-live]',
       )
       if ( canvas && img && img.naturalWidth > 0 ) {
-        canvas.width = img.naturalWidth
-        canvas.height = img.naturalHeight
-        canvas.getContext( '2d' )?.drawImage( img, 0, 0 )
+        // Assigning width/height clears the bitmap, so only resize when the
+        // live frame's dimensions actually change.
+        if ( canvas.width !== img.naturalWidth ) canvas.width = img.naturalWidth
+        if ( canvas.height !== img.naturalHeight ) {
+          canvas.height = img.naturalHeight
+        }
+        const ctx = canvas.getContext( '2d' )
+        if ( ctx ) {
+          ctx.drawImage( img, 0, 0 )
+          paintedRef.current = true
+        }
       }
       rafRef.current = requestAnimationFrame( tick )
     }
@@ -55,7 +62,7 @@ function useRecordingCanvas(
     }
   }, [active] )
 
-  return canvasRef
+  return { canvasRef, paintedRef }
 }
 
 export function StepCapture() {
@@ -73,6 +80,7 @@ export function StepCapture() {
     takeShot,
     goToFilter,
     settings,
+    disableCountdown,
     adjustments,
     patchAdjustment,
     resetAdjustment,
@@ -92,44 +100,60 @@ export function StepCapture() {
   const [countdown, setCountdown] = useState<number | null>( null )
 
   // ── Countdown video recording ──────────────────────────────────────
+  // The painter runs for the whole capture step — not just while the countdown
+  // is up — so the canvas already holds a live frame when the user taps capture.
+  // A MediaRecorder attached to a canvas that has never painted captures no
+  // frames at all, which produced unusable countdown clips.
   const mediaRecorderRef = useRef<MediaRecorder | null>( null )
   const recordedChunksRef = useRef<Blob[]>( [] )
   const recordingIndexRef = useRef<number>( 0 )
-  const recordingCanvasRef = useRecordingCanvas( countdown !== null )
+  const { canvasRef: recordingCanvasRef, paintedRef: recordingPaintedRef } =
+    useRecordingCanvas( true )
+
+  /** How long to wait for the first live frame (50 ms × this) before giving up. */
+  const PAINT_WAIT_ATTEMPTS = 20
 
   const startRecording = useCallback( () => {
-    const canvas = recordingCanvasRef.current
-    if ( !canvas ) return
-    const img = document.querySelector<HTMLImageElement>(
-      'img[data-photobooth-live]',
-    )
-    if ( img && img.naturalWidth > 0 ) {
-      canvas.width = img.naturalWidth
-      canvas.height = img.naturalHeight
-      canvas.getContext( '2d' )?.drawImage( img, 0, 0 )
-    }
-    let stream: MediaStream
-    try {
-      stream = canvas.captureStream( 15 )
-    } catch {
-      return
-    }
-    recordedChunksRef.current = []
-    try {
-      const recorder = new MediaRecorder( stream, {
-        mimeType : MediaRecorder.isTypeSupported( 'video/webm;codecs=vp9' )
-          ? 'video/webm;codecs=vp9'
-          : 'video/webm',
-      } )
-      recorder.ondataavailable = ( e ) => {
-        if ( e.data.size > 0 ) recordedChunksRef.current.push( e.data )
+    let attempts = 0
+
+    const begin = () => {
+      const canvas = recordingCanvasRef.current
+      if ( !canvas || mediaRecorderRef.current ) return
+
+      // Hold off until the live frame has landed. Recording earlier yields a
+      // clip with no frames, which the upload is right to reject.
+      if ( !recordingPaintedRef.current ) {
+        attempts += 1
+        if ( attempts <= PAINT_WAIT_ATTEMPTS ) window.setTimeout( begin, 50 )
+
+        return
       }
-      recorder.start( 250 )
-      mediaRecorderRef.current = recorder
-    } catch {
-      // MediaRecorder not supported — silently skip recording
+
+      let stream: MediaStream
+      try {
+        stream = canvas.captureStream( 15 )
+      } catch {
+        return
+      }
+      recordedChunksRef.current = []
+      try {
+        const recorder = new MediaRecorder( stream, {
+          mimeType : MediaRecorder.isTypeSupported( 'video/webm;codecs=vp9' )
+            ? 'video/webm;codecs=vp9'
+            : 'video/webm',
+        } )
+        recorder.ondataavailable = ( e ) => {
+          if ( e.data.size > 0 ) recordedChunksRef.current.push( e.data )
+        }
+        recorder.start( 250 )
+        mediaRecorderRef.current = recorder
+      } catch {
+        // MediaRecorder not supported — silently skip recording
+      }
     }
-  }, [recordingCanvasRef] )
+
+    begin()
+  }, [recordingCanvasRef, recordingPaintedRef] )
 
   const stopAndUploadRecording = useCallback(
     async ( sessionId: string, index: number ) => {
@@ -168,14 +192,6 @@ export function StepCapture() {
     },
     [],
   )
-
-  // Start recording when countdown begins
-  useEffect( () => {
-    if ( countdown === 3 ) {
-      recordingIndexRef.current = photos.length
-      startRecording()
-    }
-  }, [countdown, photos.length, startRecording] )
 
   // Stop recording and upload when capture completes (pending is set)
   useEffect( () => {
@@ -256,12 +272,15 @@ export function StepCapture() {
     setTargetSlotIdx( photos.length )
 
     // Kiosk config — skip the 3-2-1 countdown and shoot immediately.
-    if ( !settings?.captureCounterEnabled ) {
+    if ( disableCountdown ) {
       takeShot()
 
       return
     }
 
+    // Record the countdown the user is about to see, starting on the click.
+    recordingIndexRef.current = photos.length
+    startRecording()
     setCountdown( 3 )
   }
 
@@ -415,7 +434,7 @@ export function StepCapture() {
       photosTaken={photos.length}
       photoCount={photoCount}
       countdown={countdown}
-      captureCounterEnabled={true}
+      captureCounterEnabled={settings?.captureCounterEnabled ?? true}
       onRetake={handleRetake}
       onAccept={handleAcceptPending}
       onCompose={handleGoToFilter}

@@ -24,6 +24,41 @@ function escapePath( p: string ): string {
 }
 
 /**
+ * Number of decodable video frames in a media file — `0` when the file has no
+ * frames at all, `1` for a recording where only a single frame landed.
+ *
+ * ffmpeg happily exits `0` while writing an empty container in those cases, so
+ * callers must check this rather than trusting the process status.
+ */
+export async function videoFrameCount( filePath: string ): Promise<number> {
+  return new Promise( ( resolve ) => {
+    const proc = spawn( "ffprobe", [
+      "-v", "error",
+      "-select_streams", "v:0",
+      "-count_frames",
+      "-show_entries", "stream=nb_read_frames",
+      "-of", "csv=p=0",
+      filePath,
+    ], { stdio : ["ignore", "pipe", "ignore"] } );
+
+    let out = "";
+    proc.stdout.on( "data", ( chunk ) => {
+      out += String( chunk );
+    } );
+    // Can't probe (no ffprobe)? Report zero so callers degrade to the slideshow
+    // instead of building a video out of clips they can't validate.
+    proc.on( "error", () => resolve( 0 ) );
+    proc.on( "close", () => {
+      const frames = Number.parseInt( out.trim(), 10 );
+      resolve( Number.isFinite( frames ) ? frames : 0 );
+    } );
+  } );
+}
+
+/** A clip needs at least two frames — a lone frame encodes to an empty file. */
+const MIN_CLIP_FRAMES = 2;
+
+/**
  * Writes a text file listing absolute paths to every image, one per line —
  * ffmpeg's concat demuxer reads this to sequence frames without re-encoding
  * each one through a complex filtergraph.
@@ -256,6 +291,23 @@ export async function generateCountdownMashup(
   const vidName = `countdown-mashup-${sessionId}.mp4`
   const outPath = path.join( CAPTURES_DIR, vidName )
 
+  // Probe before building the filter graph: a clip that captured too few frames
+  // makes ffmpeg fail the whole graph, and one bad input would otherwise take
+  // the entire mashup down. Indices are preserved so a skipped clip simply
+  // leaves its slot black instead of shifting the others.
+  const clips = await Promise.all(
+    countdownFiles
+      .slice( 0, frame.slots.length )
+      .map( async ( file ) => {
+        const name = path.basename( file );
+        const frames = await videoFrameCount( path.join( CAPTURES_DIR, name ) );
+
+        return frames >= MIN_CLIP_FRAMES ? name : null;
+      } ),
+  );
+
+  if ( clips.every( ( clip ) => clip === null ) ) return null;
+
   // Build filter graph:
   // 1. Black canvas at frame size
   // 2. Scale clips into slots → overlay on canvas
@@ -269,32 +321,33 @@ export async function generateCountdownMashup(
     `color=c=black:s=${frame.width}x${frame.height}:d=9999,format=rgba[canvas]`,
   )
   let lastOut = "canvas"
+  let inputIdx = 0
 
-  for ( let i = 0; i < countdownFiles.length && i < frame.slots.length; i++ ) {
-    const clipPath = path.join(
-      CAPTURES_DIR,
-      path.basename( countdownFiles[i] ),
-    )
+  for ( let i = 0; i < clips.length; i++ ) {
+    const clip = clips[i]
+    if ( !clip ) continue
+
     const slot = frame.slots[i]
-    const idx = i // clip input index (canvas is synthetic)
-
-    inputs.push( "-i", clipPath )
+    // `inputIdx` counts only the clips we actually pass to ffmpeg, since the
+    // canvas is synthetic and skipped clips are absent from the input list.
+    inputs.push( "-i", path.join( CAPTURES_DIR, clip ) )
 
     const tag = `v${i}`
     filters.push(
-      `[${idx}:v]scale=${slot.width}:${slot.height}:force_original_aspect_ratio=increase,crop=${slot.width}:${slot.height},setsar=1,fps=24,format=rgba[${tag}]`,
+      `[${inputIdx}:v]scale=${slot.width}:${slot.height}:force_original_aspect_ratio=increase,crop=${slot.width}:${slot.height},setsar=1,fps=24,format=rgba[${tag}]`,
     )
 
-    const outTag = i === countdownFiles.length - 1 ? "clips" : `o${i}`
+    const outTag = `o${i}`
     filters.push(
       `[${lastOut}][${tag}]overlay=${slot.left}:${slot.top}:shortest=1[${outTag}]`,
     )
     lastOut = outTag
+    inputIdx++
   }
 
   // Frame image: already pre-keyed (green pixels → transparent via sharp),
   // so just ensure rgba pixel format before overlaying on top of clips.
-  const frameIdx = countdownFiles.length
+  const frameIdx = inputIdx
   inputs.push( "-i", frameImagePath )
   filters.push(
     `[${frameIdx}:v]format=rgba[fk]`,
@@ -477,14 +530,19 @@ export async function convertCountdownToMp4(
   const mp4Name = base.replace( /\.webm$/i, ".mp4" )
   const outPath = path.join( CAPTURES_DIR, mp4Name )
 
-  // Reuse a previously converted MP4 if present.
+  // Reuse a previously converted MP4 if present *and* playable. An earlier
+  // conversion may have left an empty container behind.
   try {
-    await readFile( outPath )
-
-    return { file : mp4Name, url : `/captures/${mp4Name}` }
+    await readFile( outPath );
+    if ( await videoFrameCount( outPath ) >= MIN_CLIP_FRAMES ) {
+      return { file : mp4Name, url : `/captures/${mp4Name}` };
+    }
   } catch {
     // not converted yet
   }
+
+  // Nothing worth converting — the recording captured no frames.
+  if ( await videoFrameCount( srcPath ) < MIN_CLIP_FRAMES ) return null;
 
   await new Promise<void>( ( resolve, reject ) => {
     const proc = spawn( "ffmpeg", [
@@ -513,6 +571,9 @@ export async function convertCountdownToMp4(
       else reject( new Error( `ffmpeg countdown mp4 conversion exited with ${code}` ) )
     } )
   } )
+
+  // ffmpeg exits 0 even when it wrote an empty container, so verify the result.
+  if ( await videoFrameCount( outPath ) < MIN_CLIP_FRAMES ) return null;
 
   return { file : mp4Name, url : `/captures/${mp4Name}` }
 }

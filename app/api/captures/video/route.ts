@@ -57,14 +57,11 @@ export async function POST( request: Request ) {
         countdownFiles,
         frameKey,
       );
-      if ( !result ) {
-        return Response.json(
-          { error : "ffmpeg not available" },
-          { status : 501 },
-        );
+      // A clip may have been unusable (e.g. recorded before the preview was
+      // live). Fall through to the slideshow rather than failing the request.
+      if ( result ) {
+        return Response.json( result );
       }
-
-      return Response.json( result );
     }
 
     // Fallback: image slideshow

@@ -82,6 +82,13 @@ export function FramePreview( {
             const photo = reviewing && i === activeSlotIdx ? pending : photos[i]
             const adj = adjustments[i]
 
+            // `adj.x` / `adj.y` are frame pixels while this img is exactly one
+            // slot wide, so a percentage of its own size keeps the pan identical
+            // at any preview scale.
+            const shiftX = slot.width ? ( adj.x / slot.width ) * 100 : 0
+            const shiftY = slot.height ? ( adj.y / slot.height ) * 100 : 0
+            const transform = `translate(${shiftX}%, ${shiftY}%) scale(${adj.zoom})`
+
             return (
               <div
                 key={i}
@@ -109,7 +116,7 @@ export function FramePreview( {
                       width     : '100%',
                       height    : '100%',
                       objectFit : 'cover',
-                      transform : `translate(${adj.x}px, ${adj.y}px) scale(${adj.zoom})`,
+                      transform,
                       filter    : getCSSFilter( globalFilter ),
                     }}
                   />

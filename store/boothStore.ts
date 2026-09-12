@@ -38,6 +38,28 @@ export const TIMEOUT_WARNING_SECONDS = 5;
 /** Timeout for individual capture requests (ms). */
 const CAPTURE_TIMEOUT_MS = 30_000;
 
+/** Slots are kept for the largest frame we support. */
+const MAX_SLOTS = 10;
+
+/**
+ * Per-slot framing set on the capture step and consumed when composing.
+ *
+ * `x`/`y` are in *frame* pixels — the same space the compose API crops in —
+ * not screen pixels, so a pan means the same crop no matter how large the
+ * preview happens to be rendered.
+ */
+export type SlotAdjustment = { x: number; y: number; zoom: number; filter: string };
+
+/** Neutral framing for every slot. */
+export function createDefaultAdjustments( count = MAX_SLOTS ): SlotAdjustment[] {
+  return Array.from( { length : count } ).map( () => ( {
+    x      : 0,
+    y      : 0,
+    zoom   : 1.0,
+    filter : 'none',
+  } ) );
+}
+
 const newId = () => Math.random().toString( 36 ).slice( 2, 10 );
 
 /** Extract a human-readable message from any thrown value. */
@@ -100,6 +122,13 @@ export interface BoothState {
    */
   settings: BoothClientSettings | null;
 
+  // ── Framing ──────────────────────────────────────
+  /**
+   * Pan / zoom / filter per slot. Authored on the capture step, applied on the
+   * filter step's preview, and sent to the compose API.
+   */
+  adjustments: SlotAdjustment[];
+
   // ── Filter ─────────────────────────────────────────
   /** Currently selected global filter on the filter step. */
   globalFilter: string;
@@ -117,7 +146,7 @@ export interface BoothState {
   addFrame: ( frame: ClientFrame ) => void;
   takeShot: ( replaceIndex?: number ) => Promise<void>;
   acceptPending: ( replaceIndex?: number ) => Promise<void>;
-  composeStripWithAdjustments: ( adjustments: { x: number; y: number; zoom: number; filter: string }[] ) => Promise<void>;
+  composeStripWithAdjustments: ( adjustments: SlotAdjustment[] ) => Promise<void>;
   setGifUrl: ( url: string | null ) => void;
   setVideoUrl: ( url: string | null ) => void;
   setLoopVideoUrl: ( url: string | null ) => void;
@@ -127,6 +156,9 @@ export interface BoothState {
   setDisableCountdown: ( disabled: boolean ) => void;
   setSettings: ( settings: BoothClientSettings ) => void;
   resetTimer: () => void;
+  setAdjustments: ( adjustments: SlotAdjustment[] ) => void;
+  patchAdjustment: ( index: number, patch: Partial<SlotAdjustment> ) => void;
+  resetAdjustment: ( index: number ) => void;
   setGlobalFilter: ( filter: string ) => void;
   setPayment: ( payment: Partial<Pick<BoothState, 'paymentStatus' | 'paymentOrderId' | 'paymentQrCodeUrl' | 'paymentDeeplinkUrl'>> ) => void;
 }
@@ -148,6 +180,7 @@ function freshSessionState(): Partial<BoothState> {
     countdownClips : [],
     error          : null,
     globalFilter   : 'none',
+    adjustments    : createDefaultAdjustments(),
   };
 }
 
@@ -180,6 +213,7 @@ export const useBoothStore = create<BoothState>()(
     disableCountdown : true,
     settings         : null,
     globalFilter     : 'none',
+    adjustments      : createDefaultAdjustments(),
 
     // Payment
     paymentStatus      : '' as const,
@@ -384,6 +418,23 @@ export const useBoothStore = create<BoothState>()(
 
     // ── Filter ─────────────────────────────────────
     setGlobalFilter : ( filter ) => set( { globalFilter : filter } ),
+
+    // ── Framing ────────────────────────────────────
+    setAdjustments : ( adjustments ) => set( { adjustments } ),
+
+    patchAdjustment : ( index, patch ) => set( ( s ) => {
+      const next = s.adjustments.slice();
+      next[index] = { ...next[index], ...patch };
+
+      return { adjustments : next };
+    } ),
+
+    resetAdjustment : ( index ) => set( ( s ) => {
+      const next = s.adjustments.slice();
+      next[index] = { x : 0, y : 0, zoom : 1.0, filter : 'none' };
+
+      return { adjustments : next };
+    } ),
 
     // ── Payment ────────────────────────────────────
     setPayment : ( payment ) => set( payment ),

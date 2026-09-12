@@ -17,6 +17,7 @@ export function StepFilter() {
     phase,
     globalFilter,
     setGlobalFilter,
+    adjustments,
   } = useBoothStore()
 
   const frame = frames.find( ( f ) => f.key === frameKey ) ?? frames[0]
@@ -25,36 +26,14 @@ export function StepFilter() {
 
   const [cacheBuster] = useState( () => String( Date.now() ) )
 
-  const [adjustments] = useState<
-    { x: number; y: number; zoom: number; filter: string }[]
-  >( () =>
-    Array.from( { length : 10 } ).map( () => ( {
-      x      : 0,
-      y      : 0,
-      zoom   : 1.0,
-      filter : 'none',
-    } ) ),
-  )
-
   const frameContainerRef = useRef<HTMLDivElement>( null )
 
-  const getScale = useCallback( () => {
-    if ( !frameContainerRef.current ) return 1
-    const el = frameContainerRef.current
-
-    return Math.min(
-      el.clientHeight / frame.height,
-      ( el.parentElement?.clientWidth ?? el.clientWidth ) / frame.width,
-    )
-  }, [frame] )
-
   const handleCompose = () => {
-    const scale = getScale()
+    // The capture step already stored pan/zoom in frame pixels; only the filter
+    // is decided here, so pass the framing through untouched.
     const finalAdjustments = adjustments.slice( 0, photoCount ).map( ( adj ) => ( {
       ...adj,
       filter : globalFilter,
-      x      : adj.x / scale,
-      y      : adj.y / scale,
     } ) )
     composeStripWithAdjustments( finalAdjustments )
   }

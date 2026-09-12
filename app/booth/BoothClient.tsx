@@ -72,17 +72,16 @@ export function BoothClient() {
     }
 
     case 2: {
-      // Filter idle timeout — compose with current filter and advance to result
+      // Filter idle timeout — compose with the current filter and advance to result.
+      // Reuse the framing panned/zoomed on the capture step instead of dropping it.
       const frame = state.frames.find( ( f ) => f.key === state.frameKey ) ?? state.frames[0]
       const count = frame?.photoCount ?? 0
       const filter = state.globalFilter ?? 'none'
-      const defaults = Array.from( { length : count } ).map( () => ( {
-        x      : 0,
-        y      : 0,
-        zoom   : 1.0,
-        filter : filter,
+      const adjustments = state.adjustments.slice( 0, count ).map( ( adj ) => ( {
+        ...adj,
+        filter,
       } ) )
-      composeStripWithAdjustments( defaults )
+      composeStripWithAdjustments( adjustments )
       break
     }
 

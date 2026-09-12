@@ -73,6 +73,9 @@ export function StepCapture() {
     takeShot,
     goToFilter,
     settings,
+    adjustments,
+    patchAdjustment,
+    resetAdjustment,
   } = useBoothStore()
 
   const frame = frames.find( ( f ) => f.key === frameKey ) ?? frames[0]
@@ -203,16 +206,6 @@ export function StepCapture() {
     return () => clearTimeout( timer )
   }, [countdown, takeShot] )
 
-  const [adjustments, setAdjustments] = useState<
-    { x: number; y: number; zoom: number; filter: string }[]
-  >( () =>
-    Array.from( { length : 10 } ).map( () => ( {
-      x      : 0,
-      y      : 0,
-      zoom   : 1.0,
-      filter : 'none',
-    } ) ),
-  )
   const [selectedSlotIdx, setSelectedSlotIdx] = useState<number | null>( null )
   const [targetSlotIdx, setTargetSlotIdx] = useState<number | null>( null )
   const [cacheBuster, setCacheBuster] = useState( '' )
@@ -252,12 +245,8 @@ export function StepCapture() {
 
   const handleRetake = () => {
     if ( activeSlotIdx !== null ) {
-      setAdjustments( ( prev ) => {
-        const next = [...prev]
-        next[activeSlotIdx] = { x : 0, y : 0, zoom : 1.0, filter : 'none' }
-
-        return next
-      } )
+      // Drop this slot's framing along with the rejected shot.
+      resetAdjustment( activeSlotIdx )
     }
     setSelectedSlotIdx( null )
     retakePending()
@@ -319,48 +308,36 @@ export function StepCapture() {
   const handleZoomChange = useCallback(
     ( i: number, newZoom: number ) => {
       const clampedZoom = Math.max( 1.0, Math.min( 2.5, newZoom ) )
-      setAdjustments( ( prev ) => {
-        const scale = getScale()
-        const slot = frame.slots[i]
-        const maxDx = slot ? ( slot.width * scale * ( clampedZoom - 1 ) ) / 2 : 0
-        const maxDy = slot ? ( slot.height * scale * ( clampedZoom - 1 ) ) / 2 : 0
-        const next = [...prev]
-        next[i] = {
-          ...next[i],
-          zoom : clampedZoom,
-          x    : Math.max( -maxDx, Math.min( maxDx, next[i].x ) ),
-          y    : Math.max( -maxDy, Math.min( maxDy, next[i].y ) ),
-        }
-
-        return next
+      const current = useBoothStore.getState().adjustments[i]
+      const slot = frame.slots[i]
+      // Bounds are frame pixels, matching what the store holds.
+      const maxDx = slot ? ( slot.width * ( clampedZoom - 1 ) ) / 2 : 0
+      const maxDy = slot ? ( slot.height * ( clampedZoom - 1 ) ) / 2 : 0
+      patchAdjustment( i, {
+        zoom : clampedZoom,
+        x    : Math.max( -maxDx, Math.min( maxDx, current.x ) ),
+        y    : Math.max( -maxDy, Math.min( maxDy, current.y ) ),
       } )
     },
-    [frame, getScale],
+    [frame, patchAdjustment],
   )
 
   const handleMouseMove = useCallback(
     ( e: MouseEvent ) => {
       if ( !dragStartRef.current || activeSlotIdx === null ) return
       const { x: startX, y: startY, initX, initY } = dragStartRef.current
-      const dx = e.clientX - startX
-      const dy = e.clientY - startY
-      const scale = getScale()
+      const scale = getScale() || 1
       const slot = frame.slots[activeSlotIdx]
-      setAdjustments( ( prev ) => {
-        const zoom = prev[activeSlotIdx].zoom
-        const maxDx = slot ? ( slot.width * scale * ( zoom - 1 ) ) / 2 : 0
-        const maxDy = slot ? ( slot.height * scale * ( zoom - 1 ) ) / 2 : 0
-        const next = [...prev]
-        next[activeSlotIdx] = {
-          ...next[activeSlotIdx],
-          x : Math.max( -maxDx, Math.min( maxDx, initX + dx ) ),
-          y : Math.max( -maxDy, Math.min( maxDy, initY + dy ) ),
-        }
-
-        return next
+      const zoom = useBoothStore.getState().adjustments[activeSlotIdx].zoom
+      const maxDx = slot ? ( slot.width * ( zoom - 1 ) ) / 2 : 0
+      const maxDy = slot ? ( slot.height * ( zoom - 1 ) ) / 2 : 0
+      // Screen pixels → frame pixels, so the stored pan is preview-size agnostic.
+      patchAdjustment( activeSlotIdx, {
+        x : Math.max( -maxDx, Math.min( maxDx, initX + ( e.clientX - startX ) / scale ) ),
+        y : Math.max( -maxDy, Math.min( maxDy, initY + ( e.clientY - startY ) / scale ) ),
       } )
     },
-    [activeSlotIdx, frame, getScale],
+    [activeSlotIdx, frame, getScale, patchAdjustment],
   )
 
   const handleMouseUp = useCallback( () => {
@@ -383,25 +360,17 @@ export function StepCapture() {
       if ( !dragStartRef.current || activeSlotIdx === null ) return
       const touch = e.touches[0]
       const { x: startX, y: startY, initX, initY } = dragStartRef.current
-      const dx = touch.clientX - startX
-      const dy = touch.clientY - startY
-      const scale = getScale()
+      const scale = getScale() || 1
       const slot = frame.slots[activeSlotIdx]
-      setAdjustments( ( prev ) => {
-        const zoom = prev[activeSlotIdx].zoom
-        const maxDx = slot ? ( slot.width * scale * ( zoom - 1 ) ) / 2 : 0
-        const maxDy = slot ? ( slot.height * scale * ( zoom - 1 ) ) / 2 : 0
-        const next = [...prev]
-        next[activeSlotIdx] = {
-          ...next[activeSlotIdx],
-          x : Math.max( -maxDx, Math.min( maxDx, initX + dx ) ),
-          y : Math.max( -maxDy, Math.min( maxDy, initY + dy ) ),
-        }
-
-        return next
+      const zoom = useBoothStore.getState().adjustments[activeSlotIdx].zoom
+      const maxDx = slot ? ( slot.width * ( zoom - 1 ) ) / 2 : 0
+      const maxDy = slot ? ( slot.height * ( zoom - 1 ) ) / 2 : 0
+      patchAdjustment( activeSlotIdx, {
+        x : Math.max( -maxDx, Math.min( maxDx, initX + ( touch.clientX - startX ) / scale ) ),
+        y : Math.max( -maxDy, Math.min( maxDy, initY + ( touch.clientY - startY ) / scale ) ),
       } )
     },
-    [activeSlotIdx, frame, getScale],
+    [activeSlotIdx, frame, getScale, patchAdjustment],
   )
 
   const handleTouchEnd = useCallback( () => {

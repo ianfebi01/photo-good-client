@@ -107,7 +107,7 @@ export function StepTimer( { onTimesUp, resetKey }: StepTimerProps = {} ) {
         </svg>
         <span
           className={cn(
-            'text-xs font-bold tabular-nums font-sans',
+            'text-xs font-bold tabular-nums font-jakarta',
             showWarning ? 'text-red-500' : 'text-neutral-500',
           )}
         >

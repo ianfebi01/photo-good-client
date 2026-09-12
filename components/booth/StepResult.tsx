@@ -238,6 +238,7 @@ export function StepResult() {
             size="lg"
             variant="outline"
             onClick={resetSession}
+            disabled={syncStatus === 'syncing'}
           >
           Start new session
           </Button>

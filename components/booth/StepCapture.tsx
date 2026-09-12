@@ -72,6 +72,7 @@ export function StepCapture() {
     retakePending,
     takeShot,
     goToFilter,
+    disableCountdown,
   } = useBoothStore()
 
   const frame = frames.find( ( f ) => f.key === frameKey ) ?? frames[0]
@@ -264,6 +265,14 @@ export function StepCapture() {
 
   const handleSnap = () => {
     setTargetSlotIdx( photos.length )
+
+    // Kiosk config — skip the 3-2-1 countdown and shoot immediately.
+    if ( disableCountdown ) {
+      takeShot()
+
+      return
+    }
+
     setCountdown( 3 )
   }
 

@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { persist, createJSONStorage } from "zustand/middleware";
+import { persist } from "zustand/middleware";
 
 import {
   type ClientFrame,
@@ -86,6 +86,8 @@ export interface BoothState {
   timerEnabled: boolean;
   /** Seconds remaining on the current step timer. */
   timerSecondsLeft: number | null;
+  /** Kiosk config: skip the 3-2-1 shutter countdown and capture instantly. */
+  disableCountdown: boolean;
 
   // ── Filter ─────────────────────────────────────────
   /** Currently selected global filter on the filter step. */
@@ -111,6 +113,7 @@ export interface BoothState {
   addCountdownClip: ( clip: Shot ) => void;
   setTimerEnabled: ( enabled: boolean ) => void;
   setTimerSecondsLeft: ( seconds: number | null ) => void;
+  setDisableCountdown: ( disabled: boolean ) => void;
   resetTimer: () => void;
   setGlobalFilter: ( filter: string ) => void;
   setPayment: ( payment: Partial<Pick<BoothState, 'paymentStatus' | 'paymentOrderId' | 'paymentQrCodeUrl' | 'paymentDeeplinkUrl'>> ) => void;
@@ -162,6 +165,7 @@ export const useBoothStore = create<BoothState>()(
       step             : 0,
       timerEnabled     : false,
       timerSecondsLeft : null,
+      disableCountdown : true,
       globalFilter     : 'none',
 
       // Payment
@@ -350,6 +354,7 @@ export const useBoothStore = create<BoothState>()(
       // ── Timer controls ─────────────────────────────
       setTimerEnabled     : ( enabled ) => set( { timerEnabled : enabled } ),
       setTimerSecondsLeft : ( seconds ) => set( { timerSecondsLeft : seconds } ),
+      setDisableCountdown : ( disabled ) => set( { disableCountdown : disabled } ),
       resetTimer          : () => {
         const { step } = get();
         const timeout = STEP_TIMEOUTS[step] ?? 30;
@@ -364,7 +369,7 @@ export const useBoothStore = create<BoothState>()(
     } ),
     {
       name       : "booth-store",
-      storage    : createJSONStorage( () => localStorage ),
+      // storage    : createJSONStorage( () => localStorage ),
       partialize : ( state ) => ( {
         started            : state.started,
         frameKey           : state.frameKey,
@@ -378,6 +383,7 @@ export const useBoothStore = create<BoothState>()(
         countdownClips     : state.countdownClips,
         timerSecondsLeft   : state.timerSecondsLeft,
         timerEnabled       : state.timerEnabled,
+        disableCountdown   : state.disableCountdown,
         paymentStatus      : state.paymentStatus,
         paymentOrderId     : state.paymentOrderId,
         paymentQrCodeUrl   : state.paymentQrCodeUrl,

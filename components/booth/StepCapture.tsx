@@ -72,7 +72,6 @@ export function StepCapture() {
     retakePending,
     takeShot,
     goToFilter,
-    disableCountdown,
     settings,
   } = useBoothStore()
 
@@ -268,7 +267,7 @@ export function StepCapture() {
     setTargetSlotIdx( photos.length )
 
     // Kiosk config — skip the 3-2-1 countdown and shoot immediately.
-    if ( disableCountdown ) {
+    if ( !settings?.captureCounterEnabled ) {
       takeShot()
 
       return
@@ -447,7 +446,7 @@ export function StepCapture() {
       photosTaken={photos.length}
       photoCount={photoCount}
       countdown={countdown}
-      captureCounterEnabled={settings?.captureCounterEnabled ?? true}
+      captureCounterEnabled={true}
       onRetake={handleRetake}
       onAccept={handleAcceptPending}
       onCompose={handleGoToFilter}

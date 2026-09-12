@@ -1,5 +1,4 @@
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
 
 import {
   type ClientFrame,
@@ -155,263 +154,238 @@ function freshSessionState(): Partial<BoothState> {
 // ── Store ─────────────────────────────────────────────────────────
 
 export const useBoothStore = create<BoothState>()(
-  persist(
-    ( set, get ) => ( {
-      // ── Initial state ──────────────────────────────
-      started          : false,
-      frameKey         : DEFAULT_FRAME_KEY,
-      sessionId        : "",
-      photos           : [],
-      strip            : null,
-      gifUrl           : null,
-      videoUrl         : null,
-      loopVideoUrl     : null,
-      countdownClips   : [],
-      phase            : "idle",
-      pending          : null,
-      flash            : false,
-      streamKey        : "live",
-      error            : null,
-      uploadOpen       : false,
-      frames           : FALLBACK_FRAMES,
-      status           : null,
-      step             : 0,
-      timerEnabled     : false,
-      timerSecondsLeft : null,
-      disableCountdown : true,
-      settings         : null,
-      globalFilter     : 'none',
 
-      // Payment
-      paymentStatus      : '' as const,
-      paymentOrderId     : null,
-      paymentQrCodeUrl   : null,
-      paymentDeeplinkUrl : null,
-      resultSynced       : false,
+  ( set, get ) => ( {
+    // ── Initial state ──────────────────────────────
+    started          : false,
+    frameKey         : DEFAULT_FRAME_KEY,
+    sessionId        : "",
+    photos           : [],
+    strip            : null,
+    gifUrl           : null,
+    videoUrl         : null,
+    loopVideoUrl     : null,
+    countdownClips   : [],
+    phase            : "idle",
+    pending          : null,
+    flash            : false,
+    streamKey        : "live",
+    error            : null,
+    uploadOpen       : false,
+    frames           : FALLBACK_FRAMES,
+    status           : null,
+    step             : 0,
+    timerEnabled     : false,
+    timerSecondsLeft : null,
+    disableCountdown : true,
+    settings         : null,
+    globalFilter     : 'none',
 
-      // ── Setters ────────────────────────────────────
-      setStatus : ( status ) => set( { status } ),
+    // Payment
+    paymentStatus      : '' as const,
+    paymentOrderId     : null,
+    paymentQrCodeUrl   : null,
+    paymentDeeplinkUrl : null,
+    resultSynced       : false,
 
-      setFrames : ( frames ) => {
-        const currentKey = get().frameKey;
-        const keyExists = frames.some( ( f ) => f.key === currentKey );
+    // ── Setters ────────────────────────────────────
+    setStatus : ( status ) => set( { status } ),
+
+    setFrames : ( frames ) => {
+      const currentKey = get().frameKey;
+      const keyExists = frames.some( ( f ) => f.key === currentKey );
+      set( {
+        frames,
+        frameKey : keyExists ? currentKey : ( frames[0]?.key ?? "" ),
+      } );
+    },
+
+    setUploadOpen : ( uploadOpen ) => set( { uploadOpen } ),
+
+    restartPreview : () => set( { streamKey : newId() } ),
+
+    // ── Navigation ─────────────────────────────────
+    start      : () => set( { started : true, step : 1 } ),
+    goToFilter : () => set( { step : 2 } ),
+
+    // ── Frame selection ────────────────────────────
+    selectFrame : ( key ) => {
+      if ( key === get().frameKey ) return;
+      _capturing = false;
+      set( {
+        ...freshSessionState(),
+        frameKey  : key,
+        streamKey : newId(),
+      } );
+    },
+
+    // ── Session reset ──────────────────────────────
+    reset : () => {
+      _capturing = false;
+      const { frames } = get();
+      set( {
+        ...freshSessionState(),
+        frameKey         : frames[0]?.key ?? DEFAULT_FRAME_KEY,
+        flash            : false,
+        streamKey        : newId(),
+        step             : 0,
+        timerSecondsLeft : null,
+        resultSynced     : false,
+      } );
+    },
+
+    // ── Retake a pending shot ──────────────────────
+    retakePending : () => {
+      const { phase, pending } = get();
+      if ( phase !== "reviewing" || !pending ) return;
+      set( { pending : null, phase : "idle", streamKey : newId() } );
+    },
+
+    // ── Add an uploaded frame ──────────────────────
+    addFrame : ( newFrame ) => {
+      const { frames } = get();
+      if ( !frames.some( ( f ) => f.key === newFrame.key ) ) {
+        set( { frames : [...frames, newFrame] } );
+      }
+      set( { uploadOpen : false } );
+      get().selectFrame( newFrame.key );
+    },
+
+    // ── Capture a shot ─────────────────────────────
+    takeShot : async ( replaceIndex ) => {
+      const { photos, frames, frameKey } = get();
+      const frame = frames.find( ( f ) => f.key === frameKey ) ?? frames[0];
+      const photoCount = frame?.photoCount ?? 0;
+
+      if ( _capturing ) return;
+      if ( replaceIndex === undefined && photos.length >= photoCount ) return;
+      _capturing = true;
+
+      const controller = new AbortController();
+      const timeout = setTimeout( () => controller.abort(), CAPTURE_TIMEOUT_MS );
+
+      set( { error : null, phase : "running" } );
+      try {
+        const { sessionId } = get();
+        const activeSession = sessionId || newId();
+        if ( !sessionId ) set( { sessionId : activeSession } );
+        const index = replaceIndex ?? photos.length;
+
+        const data = await captureShot( { sessionId : activeSession, index } );
+
         set( {
-          frames,
-          frameKey : keyExists ? currentKey : ( frames[0]?.key ?? "" ),
+          pending : { file : data.file, url : `${data.url}?v=${newId()}` },
+          phase   : "reviewing",
         } );
-      },
-
-      setUploadOpen : ( uploadOpen ) => set( { uploadOpen } ),
-
-      restartPreview : () => set( { streamKey : newId() } ),
-
-      // ── Navigation ─────────────────────────────────
-      start      : () => set( { started : true, step : 1 } ),
-      goToFilter : () => set( { step : 2 } ),
-
-      // ── Frame selection ────────────────────────────
-      selectFrame : ( key ) => {
-        if ( key === get().frameKey ) return;
+      } catch ( err ) {
+        const message = err instanceof Error && err.name === "AbortError"
+          ? "Capture timed out"
+          : errorMessage( err, "Something went wrong" );
+        set( { error : message, phase : "error" } );
+        get().restartPreview();
+      } finally {
+        clearTimeout( timeout );
+        set( { flash : false } );
         _capturing = false;
-        set( {
-          ...freshSessionState(),
-          frameKey  : key,
-          streamKey : newId(),
-        } );
-      },
+      }
+    },
 
-      // ── Session reset ──────────────────────────────
-      reset : () => {
-        _capturing = false;
-        const { frames } = get();
-        set( {
-          ...freshSessionState(),
-          frameKey         : frames[0]?.key ?? DEFAULT_FRAME_KEY,
-          flash            : false,
-          streamKey        : newId(),
-          step             : 0,
-          timerSecondsLeft : null,
-          resultSynced     : false,
-        } );
-      },
+    // ── Accept pending shot ────────────────────────
+    acceptPending : async ( replaceIndex ) => {
+      const { pending, phase, photos, frames, frameKey } = get();
+      if ( !pending || phase !== "reviewing" ) return;
+      if ( _capturing ) return;
+      _capturing = true;
 
-      // ── Retake a pending shot ──────────────────────
-      retakePending : () => {
-        const { phase, pending } = get();
-        if ( phase !== "reviewing" || !pending ) return;
-        set( { pending : null, phase : "idle", streamKey : newId() } );
-      },
-
-      // ── Add an uploaded frame ──────────────────────
-      addFrame : ( newFrame ) => {
-        const { frames } = get();
-        if ( !frames.some( ( f ) => f.key === newFrame.key ) ) {
-          set( { frames : [...frames, newFrame] } );
-        }
-        set( { uploadOpen : false } );
-        get().selectFrame( newFrame.key );
-      },
-
-      // ── Capture a shot ─────────────────────────────
-      takeShot : async ( replaceIndex ) => {
-        const { photos, frames, frameKey } = get();
+      set( { error : null } );
+      try {
         const frame = frames.find( ( f ) => f.key === frameKey ) ?? frames[0];
         const photoCount = frame?.photoCount ?? 0;
 
-        if ( _capturing ) return;
-        if ( replaceIndex === undefined && photos.length >= photoCount ) return;
-        _capturing = true;
-
-        const controller = new AbortController();
-        const timeout = setTimeout( () => controller.abort(), CAPTURE_TIMEOUT_MS );
-
-        set( { error : null, phase : "running" } );
-        try {
-          const { sessionId } = get();
-          const activeSession = sessionId || newId();
-          if ( !sessionId ) set( { sessionId : activeSession } );
-          const index = replaceIndex ?? photos.length;
-
-          const data = await captureShot( { sessionId : activeSession, index } );
-
-          set( {
-            pending : { file : data.file, url : `${data.url}?v=${newId()}` },
-            phase   : "reviewing",
-          } );
-        } catch ( err ) {
-          const message = err instanceof Error && err.name === "AbortError"
-            ? "Capture timed out"
-            : errorMessage( err, "Something went wrong" );
-          set( { error : message, phase : "error" } );
-          get().restartPreview();
-        } finally {
-          clearTimeout( timeout );
-          set( { flash : false } );
-          _capturing = false;
+        const nextPhotos = [...photos];
+        if ( replaceIndex !== undefined && replaceIndex < photos.length ) {
+          nextPhotos[replaceIndex] = pending;
+        } else {
+          nextPhotos.push( pending );
         }
-      },
+        set( { photos : nextPhotos, pending : null } );
 
-      // ── Accept pending shot ────────────────────────
-      acceptPending : async ( replaceIndex ) => {
-        const { pending, phase, photos, frames, frameKey } = get();
-        if ( !pending || phase !== "reviewing" ) return;
-        if ( _capturing ) return;
-        _capturing = true;
-
-        set( { error : null } );
-        try {
-          const frame = frames.find( ( f ) => f.key === frameKey ) ?? frames[0];
-          const photoCount = frame?.photoCount ?? 0;
-
-          const nextPhotos = [...photos];
-          if ( replaceIndex !== undefined && replaceIndex < photos.length ) {
-            nextPhotos[replaceIndex] = pending;
-          } else {
-            nextPhotos.push( pending );
-          }
-          set( { photos : nextPhotos, pending : null } );
-
-          if ( nextPhotos.length >= photoCount ) {
-            set( { phase : "adjusting" } );
-          } else {
-            set( { phase : "idle", streamKey : newId() } );
-          }
-        } catch ( err ) {
-          set( {
-            error : errorMessage( err, "Accept failed" ),
-            phase : "error",
-          } );
-          get().restartPreview();
-        } finally {
-          _capturing = false;
+        if ( nextPhotos.length >= photoCount ) {
+          set( { phase : "adjusting" } );
+        } else {
+          set( { phase : "idle", streamKey : newId() } );
         }
-      },
-
-      // ── Compose strip with custom adjustments ──────
-      composeStripWithAdjustments : async ( adjustments ) => {
-        const { photos, frameKey, sessionId } = get();
-        set( { phase : "composing", error : null } );
-        try {
-          const activeSession = sessionId || newId();
-          const composed = await composeStrip( {
-            sessionId : activeSession,
-            frame     : frameKey,
-            files     : photos.map( ( s ) => s.file ),
-            adjustments,
-          } );
-          set( {
-            strip     : composed.url,
-            phase     : "done",
-            step      : 3,
-            sessionId : activeSession,
-          } );
-        } catch ( err ) {
-          set( {
-            error : errorMessage( err, "Compose failed" ),
-            phase : "error",
-          } );
-        }
-      },
-
-      // ── Store generated GIF / video URLs ──────────
-      setGifUrl       : ( url ) => set( { gifUrl : url } ),
-      setVideoUrl     : ( url ) => set( { videoUrl : url } ),
-      setLoopVideoUrl : ( url ) => set( { loopVideoUrl : url } ),
-
-      // ── Store a countdown video clip ───────────────
-      addCountdownClip : ( clip ) => {
-        set( ( s ) => ( {
-          countdownClips : [...s.countdownClips, clip],
-        } ) );
-      },
-
-      // ── Timer controls ─────────────────────────────
-      setTimerEnabled     : ( enabled ) => set( { timerEnabled : enabled } ),
-      setTimerSecondsLeft : ( seconds ) => set( { timerSecondsLeft : seconds } ),
-      setDisableCountdown : ( disabled ) => set( { disableCountdown : disabled } ),
-
-      // ── Per-booth settings ─────────────────────────
-      // The server owns the idle step timer toggle, so mirror it here.
-      setSettings : ( settings ) => set( {
-        settings,
-        timerEnabled : settings.timerEnabled,
-      } ),
-
-      resetTimer : () => {
-        const { step } = get();
-        const timeout = STEP_TIMEOUTS[step] ?? 30;
-        set( { timerSecondsLeft : timeout } );
-      },
-
-      // ── Filter ─────────────────────────────────────
-      setGlobalFilter : ( filter ) => set( { globalFilter : filter } ),
-
-      // ── Payment ────────────────────────────────────
-      setPayment : ( payment ) => set( payment ),
-    } ),
-    {
-      name       : "booth-store",
-      // storage    : createJSONStorage( () => localStorage ),
-      partialize : ( state ) => ( {
-        started            : state.started,
-        frameKey           : state.frameKey,
-        sessionId          : state.sessionId,
-        photos             : state.photos,
-        strip              : state.strip,
-        step               : state.step,
-        gifUrl             : state.gifUrl,
-        videoUrl           : state.videoUrl,
-        loopVideoUrl       : state.loopVideoUrl,
-        countdownClips     : state.countdownClips,
-        timerSecondsLeft   : state.timerSecondsLeft,
-        timerEnabled       : state.timerEnabled,
-        disableCountdown   : state.disableCountdown,
-        paymentStatus      : state.paymentStatus,
-        paymentOrderId     : state.paymentOrderId,
-        paymentQrCodeUrl   : state.paymentQrCodeUrl,
-        paymentDeeplinkUrl : state.paymentDeeplinkUrl,
-        resultSynced       : state.resultSynced,
-      } ),
+      } catch ( err ) {
+        set( {
+          error : errorMessage( err, "Accept failed" ),
+          phase : "error",
+        } );
+        get().restartPreview();
+      } finally {
+        _capturing = false;
+      }
     },
-  ),
+
+    // ── Compose strip with custom adjustments ──────
+    composeStripWithAdjustments : async ( adjustments ) => {
+      const { photos, frameKey, sessionId } = get();
+      set( { phase : "composing", error : null } );
+      try {
+        const activeSession = sessionId || newId();
+        const composed = await composeStrip( {
+          sessionId : activeSession,
+          frame     : frameKey,
+          files     : photos.map( ( s ) => s.file ),
+          adjustments,
+        } );
+        set( {
+          strip     : composed.url,
+          phase     : "done",
+          step      : 3,
+          sessionId : activeSession,
+        } );
+      } catch ( err ) {
+        set( {
+          error : errorMessage( err, "Compose failed" ),
+          phase : "error",
+        } );
+      }
+    },
+
+    // ── Store generated GIF / video URLs ──────────
+    setGifUrl       : ( url ) => set( { gifUrl : url } ),
+    setVideoUrl     : ( url ) => set( { videoUrl : url } ),
+    setLoopVideoUrl : ( url ) => set( { loopVideoUrl : url } ),
+
+    // ── Store a countdown video clip ───────────────
+    addCountdownClip : ( clip ) => {
+      set( ( s ) => ( {
+        countdownClips : [...s.countdownClips, clip],
+      } ) );
+    },
+
+    // ── Timer controls ─────────────────────────────
+    setTimerEnabled     : ( enabled ) => set( { timerEnabled : enabled } ),
+    setTimerSecondsLeft : ( seconds ) => set( { timerSecondsLeft : seconds } ),
+    setDisableCountdown : ( disabled ) => set( { disableCountdown : disabled } ),
+
+    // ── Per-booth settings ─────────────────────────
+    // The server owns the idle step timer toggle, so mirror it here.
+    setSettings : ( settings ) => set( {
+      settings,
+      timerEnabled : settings.timerEnabled,
+    } ),
+
+    resetTimer : () => {
+      const { step } = get();
+      const timeout = STEP_TIMEOUTS[step] ?? 30;
+      set( { timerSecondsLeft : timeout } );
+    },
+
+    // ── Filter ─────────────────────────────────────
+    setGlobalFilter : ( filter ) => set( { globalFilter : filter } ),
+
+    // ── Payment ────────────────────────────────────
+    setPayment : ( payment ) => set( payment ),
+  } ),
 );

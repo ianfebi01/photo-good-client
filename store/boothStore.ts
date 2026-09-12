@@ -160,7 +160,7 @@ export const useBoothStore = create<BoothState>()(
       frames           : FALLBACK_FRAMES,
       status           : null,
       step             : 0,
-      timerEnabled     : true,
+      timerEnabled     : false,
       timerSecondsLeft : null,
       globalFilter     : 'none',
 

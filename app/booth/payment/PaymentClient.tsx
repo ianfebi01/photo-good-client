@@ -251,13 +251,13 @@ export function PaymentClient() {
           <CheckCircle2 className="size-16 text-emerald-500" />
           <div className="text-center">
             <h3 className="text-xl font-bold text-emerald-600">Payment Successful!</h3>
-            <p className="text-sm text-muted-foreground mt-1">
+            <p className="text-sm text-muted-foreground mt-1 font-jakarta">
               Get ready for your photo session!
             </p>
             <p className="text-3xl font-bold text-emerald-600 mt-4 tabular-nums">
               {countdown}
             </p>
-            <p className="text-xs text-muted-foreground mt-1">
+            <p className="text-xs text-muted-foreground mt-1 font-jakarta">
               Starting in {countdown} second{countdown !== 1 ? 's' : ''}&hellip;
             </p>
           </div>

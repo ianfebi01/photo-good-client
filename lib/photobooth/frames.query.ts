@@ -275,7 +275,12 @@ export async function generateSessionLoopVideo( {
   return parseJson( response, 'Loop video generation failed' )
 }
 
-/** Upload a countdown video clip recorded during the 3s countdown. */
+/**
+ * Upload a countdown video clip recorded during the 3s countdown.
+ *
+ * Hi-res MP4 when the browser can mux H.264 (no server conversion needed),
+ * webm otherwise — the extension tells the upload route which path to take.
+ */
 export async function uploadCountdownClip( {
   sessionId,
   index,
@@ -285,8 +290,10 @@ export async function uploadCountdownClip( {
   index: number
   blob: Blob
 } ): Promise<{ file: string; url: string }> {
+  const ext = blob.type.startsWith( 'video/mp4' ) ? 'mp4' : 'webm'
+
   const form = new FormData()
-  form.append( 'file', blob, `countdown-${sessionId}-${index}.webm` )
+  form.append( 'file', blob, `countdown-${sessionId}-${index}.${ext}` )
   form.append( 'sessionId', sessionId )
   form.append( 'index', String( index ) )
   form.append( 'kind', 'countdown' )

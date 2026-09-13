@@ -1,7 +1,7 @@
 import "server-only";
 
 import { spawn } from "node:child_process";
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile, writeFile, mkdir, rename, unlink } from "node:fs/promises";
 import path from "node:path";
 import sharp from "sharp";
 
@@ -333,8 +333,11 @@ export async function generateCountdownMashup(
     inputs.push( "-i", path.join( CAPTURES_DIR, clip ) )
 
     const tag = `v${i}`
+    // Live-view clips are small (the EOS M6 preview is 480×320) and a portrait
+    // slot can stretch them ~2.5×, so scale with lanczos and add a touch of
+    // sharpening to keep the upscaled clip from looking mushy.
     filters.push(
-      `[${inputIdx}:v]scale=${slot.width}:${slot.height}:force_original_aspect_ratio=increase,crop=${slot.width}:${slot.height},setsar=1,fps=24,format=rgba[${tag}]`,
+      `[${inputIdx}:v]scale=${slot.width}:${slot.height}:force_original_aspect_ratio=increase:flags=lanczos,crop=${slot.width}:${slot.height},unsharp=5:5:0.5:5:5:0,setsar=1,fps=24,format=rgba[${tag}]`,
     )
 
     const outTag = `o${i}`
@@ -576,6 +579,49 @@ export async function convertCountdownToMp4(
   if ( await videoFrameCount( outPath ) < MIN_CLIP_FRAMES ) return null;
 
   return { file : mp4Name, url : `/captures/${mp4Name}` }
+}
+
+/**
+ * Normalise a browser-recorded countdown MP4 in place.
+ *
+ * MediaRecorder emits a *fragmented* MP4, which browsers play but iOS,
+ * QuickTime and some upload targets dislike. Rewriting it as a progressive
+ * file with the moov atom up front costs nothing extra because the streams are
+ * copied, not re-encoded. The original is kept whenever ffmpeg is missing or
+ * the remux produces something unplayable.
+ */
+export async function finalizeCountdownMp4( mp4File: string ): Promise<string> {
+  const base = path.basename( mp4File );
+  if ( !base.toLowerCase().endsWith( ".mp4" ) ) return base;
+
+  const hasFfmpeg = await ffmpegAvailable();
+  if ( !hasFfmpeg ) return base;
+
+  const srcPath = path.join( CAPTURES_DIR, base );
+  const tmpPath = path.join( CAPTURES_DIR, `tmp-${base}` );
+
+  const remuxed = await new Promise<boolean>( ( resolve ) => {
+    const proc = spawn( "ffmpeg", [
+      "-y",
+      "-i", srcPath,
+      "-c", "copy",
+      "-movflags", "+faststart",
+      tmpPath,
+    ], { stdio : "ignore" } );
+    proc.on( "error", () => resolve( false ) );
+    proc.on( "close", ( code ) => resolve( code === 0 ) );
+  } );
+
+  // Fall back to the uploaded file when the remux failed or wrote no frames.
+  if ( !remuxed || ( await videoFrameCount( tmpPath ) ) < MIN_CLIP_FRAMES ) {
+    await unlink( tmpPath ).catch( () => {} );
+
+    return base;
+  }
+
+  await rename( tmpPath, srcPath );
+
+  return base;
 }
 
 // ── Save raw (unprocessed copy) ────────────────────────────────────

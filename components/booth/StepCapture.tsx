@@ -19,11 +19,78 @@ import { getCameraPreviewUrl } from '@/lib/photobooth/frames.query'
 import { uploadCountdownClip } from '@/lib/photobooth/frames.query'
 import { ChevronRight } from 'lucide-react'
 
+// ── Countdown clip recording ────────────────────────────────────────
+//
+// The clip is recorded from the live MJPEG canvas and uploaded as MP4/H.264
+// whenever the browser can mux it, so the upload needs no server-side
+// conversion and the file plays/downloads everywhere.
+//
+// The recorded size follows the live frame *at its native resolution* — the
+// canvas is never upscaled. The EOS M6's PTP live view is only 480×320 (see
+// camera-service), and stretching it adds no detail while forcing the mashup
+// to resample a second time. A larger live view (e.g. an HDMI capture device)
+// is recorded at its own resolution, capped by RECORD_MAX_LONG_EDGE.
+
+/** Never record larger than this long edge; the source is never upscaled. */
+const RECORD_MAX_LONG_EDGE = 1920
+/** Capture cadence of the recorded canvas. */
+const RECORD_FPS = 30
+
+/** Round to an even integer — H.264 requires even dimensions. */
+function toEven( value: number ): number {
+  return Math.max( 2, Math.round( value / 2 ) * 2 )
+}
+
+/** Recording size for a live frame of `srcW`×`srcH` (downscale only). */
+function recordingSize( srcW: number, srcH: number ) {
+  const factor = Math.min( 1, RECORD_MAX_LONG_EDGE / Math.max( srcW, srcH ) )
+
+  return {
+    width  : toEven( srcW * factor ),
+    height : toEven( srcH * factor ),
+  }
+}
+
+/**
+ * Bitrate budget for the recording — ~0.15 bits per pixel per second, so a
+ * 1080p30 clip gets ~9 Mbps and the 480×320 live view gets a generous
+ * 1.2 Mbps rather than the ~0.7 Mbps that formula alone would allow.
+ */
+function recordingBitrate( width: number, height: number ): number {
+  const budget = width * height * RECORD_FPS * 0.15
+
+  return Math.round( Math.min( 12_000_000, Math.max( 1_200_000, budget ) ) )
+}
+
+/** MediaRecorder mime types, best first: MP4/H.264, then webm fallbacks. */
+const RECORD_MIME_CANDIDATES = [
+  'video/mp4;codecs=avc1.640028',
+  'video/mp4;codecs=avc1.4d002a',
+  'video/mp4;codecs=avc1.42E01E',
+  'video/mp4;codecs=avc1',
+  'video/mp4',
+  'video/webm;codecs=vp9',
+  'video/webm;codecs=vp8',
+  'video/webm',
+]
+
+/** First supported recording mime, or null when recording isn't possible. */
+function pickRecordingMime(): string | null {
+  if ( typeof MediaRecorder === 'undefined' ) return null
+
+  return (
+    RECORD_MIME_CANDIDATES.find( ( mime ) =>
+      MediaRecorder.isTypeSupported( mime ),
+    ) ?? null
+  )
+}
+
 /** Draw the live MJPEG img onto a canvas every frame so we can record it. */
 function useRecordingCanvas( active: boolean ) {
   const canvasRef = useRef<HTMLCanvasElement | null>( null )
   const paintedRef = useRef( false )
   const rafRef = useRef<number | null>( null )
+  const sizeRef = useRef<{ width: number; height: number } | null>( null )
 
   useEffect( () => {
     if ( !active ) {
@@ -41,15 +108,18 @@ function useRecordingCanvas( active: boolean ) {
         'img[data-photobooth-live]',
       )
       if ( canvas && img && img.naturalWidth > 0 ) {
-        // Assigning width/height clears the bitmap, so only resize when the
-        // live frame's dimensions actually change.
-        if ( canvas.width !== img.naturalWidth ) canvas.width = img.naturalWidth
-        if ( canvas.height !== img.naturalHeight ) {
-          canvas.height = img.naturalHeight
+        // The recording runs at the live frame's native size (capped), derived
+        // once. Assigning width/height clears the bitmap, so the size settles
+        // before recording starts and never changes after.
+        if ( !sizeRef.current ) {
+          sizeRef.current = recordingSize( img.naturalWidth, img.naturalHeight )
         }
+        const { width, height } = sizeRef.current
+        if ( canvas.width !== width ) canvas.width = width
+        if ( canvas.height !== height ) canvas.height = height
         const ctx = canvas.getContext( '2d' )
         if ( ctx ) {
-          ctx.drawImage( img, 0, 0 )
+          ctx.drawImage( img, 0, 0, width, height )
           paintedRef.current = true
         }
       }
@@ -106,6 +176,7 @@ export function StepCapture() {
   // frames at all, which produced unusable countdown clips.
   const mediaRecorderRef = useRef<MediaRecorder | null>( null )
   const recordedChunksRef = useRef<Blob[]>( [] )
+  const recordingMimeRef = useRef<string | null>( null )
   const recordingIndexRef = useRef<number>( 0 )
   const { canvasRef: recordingCanvasRef, paintedRef: recordingPaintedRef } =
     useRecordingCanvas( true )
@@ -129,19 +200,22 @@ export function StepCapture() {
         return
       }
 
+      const mime = pickRecordingMime()
+      if ( !mime ) return
+
       let stream: MediaStream
       try {
-        stream = canvas.captureStream( 15 )
+        stream = canvas.captureStream( RECORD_FPS )
       } catch {
         return
       }
       recordedChunksRef.current = []
       try {
         const recorder = new MediaRecorder( stream, {
-          mimeType : MediaRecorder.isTypeSupported( 'video/webm;codecs=vp9' )
-            ? 'video/webm;codecs=vp9'
-            : 'video/webm',
+          mimeType           : mime,
+          videoBitsPerSecond : recordingBitrate( canvas.width, canvas.height ),
         } )
+        recordingMimeRef.current = mime
         recorder.ondataavailable = ( e ) => {
           if ( e.data.size > 0 ) recordedChunksRef.current.push( e.data )
         }
@@ -163,10 +237,12 @@ export function StepCapture() {
 
       return new Promise<void>( ( resolve ) => {
         recorder.onstop = async () => {
-          const blob = new Blob( recordedChunksRef.current, {
-            type : 'video/webm',
-          } )
+          // Tag the blob with what was actually recorded — the upload names the
+          // file from this type and skips conversion for MP4.
+          const mime = recordingMimeRef.current ?? 'video/webm'
+          const blob = new Blob( recordedChunksRef.current, { type : mime } )
           recordedChunksRef.current = []
+          recordingMimeRef.current = null
           if ( blob.size < 1000 ) {
             resolve()
 

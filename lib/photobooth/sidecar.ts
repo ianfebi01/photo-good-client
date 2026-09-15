@@ -13,7 +13,12 @@ export const SIDECAR_URL =
     process.env.CAMERA_SERVICE_PORT ?? "8088"
   }`;
 
-export type SidecarStatus = { connected: boolean; model?: string | null };
+export type SidecarStatus = {
+  connected: boolean;
+  model?: string | null;
+  /** Measured size/rate of the live view the sidecar is actually getting. */
+  preview?: { width: number; height: number; fps: number };
+};
 
 /** GET /status. Returns null when the sidecar itself is unreachable/timed out. */
 export async function sidecarStatus(
@@ -48,6 +53,37 @@ export async function sidecarCapture( timeoutMs = 40_000 ): Promise<Buffer> {
     } );
     if ( !res.ok ) {
       let detail = `capture failed (${res.status})`;
+      try {
+        const body = await res.json();
+        if ( body?.error ) detail = String( body.error );
+      } catch {}
+      throw new Error( detail );
+    }
+
+    return Buffer.from( await res.arrayBuffer() );
+  } finally {
+    clearTimeout( timer );
+  }
+}
+
+/**
+ * GET /snapshot — the newest live-view frame as one JPEG.
+ *
+ * This is what a shot is: a screenshot of the movie preview, taken from the
+ * frame the sidecar is already streaming. It costs no camera time — nothing is
+ * driven and nothing is pulled off the body — so the preview keeps running and
+ * the countdown clip is never cut short by a capture.
+ */
+export async function sidecarSnapshot( timeoutMs = 8_000 ): Promise<Buffer> {
+  const controller = new AbortController();
+  const timer = setTimeout( () => controller.abort(), timeoutMs );
+  try {
+    const res = await fetch( `${SIDECAR_URL}/snapshot`, {
+      signal : controller.signal,
+      cache  : "no-store",
+    } );
+    if ( !res.ok ) {
+      let detail = `snapshot failed (${res.status})`;
       try {
         const body = await res.json();
         if ( body?.error ) detail = String( body.error );

@@ -6,15 +6,40 @@ A small Python sidecar that owns the camera via [python-gphoto2](https://github.
 It replaces shelling out to the `gphoto2` CLI. Because it holds one camera
 object in-process, it can call `camera.exit()` / `init()` to **rebind to a
 reconnected camera without restarting anything** — so unplug/replug recovers on
-its own, and the live preview never has to be torn down for a capture.
+its own.
+
+## How the live view and shots fit together
+
+The movie preview is the single source of truth. One background pump thread
+pulls frames from the camera as fast as it will deliver them, and both
+`/preview` and `/snapshot` are served from that one buffer. Consequences worth
+knowing:
+
+- The camera is never asked for a frame by two callers at once, so a shot can't
+  stall the stream behind it.
+- **A shot is a screenshot** of the newest live-view frame — no PTP still is
+  driven, so nothing is transferred off the body and the preview never freezes
+  while the guest is posing into it.
+- Because the preview keeps running, a capture no longer cuts a countdown clip
+  short; the recording ends on its `-t` deadline instead.
+- The steady traffic also stops the body dropping into its own auto-power-off
+  between shots.
+
+The trade-off is resolution: a screenshot is whatever the live view delivers.
+The EOS M6 reports `liveviewsize = Small` (its only choice) and delivers
+**480×320** — see `/status`, which reports the measured size and rate. That is a
+property of the body's PTP live view, not of this code, and it is why upscaling
+a shot adds no detail. `POST /capture` still returns a full-resolution still
+(3984×2656 on an M6) for anything that needs real pixels.
 
 ## Endpoints
 
-| Method | Path       | Returns                                            |
-| ------ | ---------- | -------------------------------------------------- |
-| GET    | `/status`  | `{ "connected": bool, "model": str \| null }`      |
-| GET    | `/preview` | `multipart/x-mixed-replace` MJPEG live view        |
-| POST   | `/capture` | full-resolution `image/jpeg` bytes                 |
+| Method | Path        | Returns                                                    |
+| ------ | ----------- | ---------------------------------------------------------- |
+| GET    | `/status`   | `{ "connected": bool, "model": str \| null, "preview": { "width", "height", "fps" } }` |
+| GET    | `/preview`  | `multipart/x-mixed-replace` MJPEG live view                |
+| GET    | `/snapshot` | newest live-view frame as one `image/jpeg` (a screenshot)  |
+| POST   | `/capture`  | full-resolution `image/jpeg` bytes                         |
 
 ## Setup & run
 

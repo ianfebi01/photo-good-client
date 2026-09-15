@@ -158,16 +158,18 @@ export async function captureShot( {
   const base = await ensureCameraDiscovered();
 
   if ( base ) {
-    // Capture directly from the local camera service, then upload to server
-    const captureRes = await fetch( `${base}/capture`, {
-      method : "POST",
+    // A shot is a screenshot of the movie preview: take the local service's
+    // newest live-view frame, then upload it. Driving a PTP still here would
+    // freeze the preview the guest is posing into.
+    const captureRes = await fetch( `${base}/snapshot`, {
+      method : "GET",
       cache  : "no-store",
     } );
     if (
       !captureRes.ok ||
       !captureRes.headers.get( "content-type" )?.startsWith( "image/" )
     ) {
-      throw new Error( "Local capture failed" );
+      throw new Error( "Local snapshot failed" );
     }
 
     const blob = await captureRes.blob();

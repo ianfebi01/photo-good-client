@@ -10,7 +10,7 @@ import {
   PHOTO_HEIGHT,
   PHOTO_WIDTH,
 } from "./config";
-import { sidecarCapture, sidecarStatus } from "./sidecar";
+import { sidecarSnapshot, sidecarStatus } from "./sidecar";
 
 export type CameraStatus = {
   /** A real camera is reachable and will be used. */
@@ -48,14 +48,22 @@ export async function detectCamera(): Promise<CameraStatus> {
 }
 
 /**
- * Capture one full-resolution still as a JPEG buffer. Real captures go through
- * the sidecar's /capture endpoint; with no camera we synthesize a mock frame.
+ * Capture one shot as a JPEG buffer.
+ *
+ * A shot is a screenshot of the movie preview: the sidecar returns the newest
+ * live-view frame rather than driving a PTP still, so the preview the guest is
+ * posing into never freezes and nothing waits on a sensor readout. The trade-off
+ * is resolution — the shot is whatever the live view delivers (480×320 on an EOS
+ * M6), not the body's full sensor resolution. Upscaling it adds no detail, so
+ * the strip is composed from the frame as-is.
+ *
+ * With no camera attached we synthesize a mock frame instead.
  */
 export async function captureStill( seq = 0 ): Promise<Buffer> {
   const status = await detectCamera();
   if ( status.mock ) return mockPhoto( seq );
 
-  return sidecarCapture();
+  return sidecarSnapshot();
 }
 
 // ---------------------------------------------------------------------------

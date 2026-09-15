@@ -76,12 +76,23 @@ export function StepResult() {
       // quiet after the shot), so wait for it and then read the clip list fresh
       // from the store instead of this render's snapshot.
       whenCountdownClipsSettled()
-        .then( () => generateSessionVideo( {
-          sessionId,
-          files,
-          countdownFiles : useBoothStore.getState().countdownClips.map( ( c ) => c.file ),
-          frameKey,
-        } ) )
+        .then( () => {
+          // Read the clips and the framing fresh from the store after the wait,
+          // rather than from this render's snapshot. The strip applied the
+          // filter step's choice to every slot, so the video has to as well.
+          const current = useBoothStore.getState()
+
+          return generateSessionVideo( {
+            sessionId,
+            files,
+            countdownFiles : current.countdownClips.map( ( c ) => c.file ),
+            frameKey,
+            adjustments    : current.adjustments.map( ( adj ) => ( {
+              ...adj,
+              filter : current.globalFilter,
+            } ) ),
+          } )
+        } )
         .then( ( r ) => {
           if ( r ) {
             setVideoUrl( r.url )

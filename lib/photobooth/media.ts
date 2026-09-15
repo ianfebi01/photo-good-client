@@ -58,6 +58,34 @@ export async function videoFrameCount( filePath: string ): Promise<number> {
 /** A clip needs at least two frames — a lone frame encodes to an empty file. */
 const MIN_CLIP_FRAMES = 2;
 
+/** Pixel dimensions of a media file (`0×0` when ffprobe can't read it). */
+async function videoSize(
+  filePath: string,
+): Promise<{ width: number; height: number }> {
+  return new Promise( ( resolve ) => {
+    const proc = spawn( "ffprobe", [
+      "-v", "error",
+      "-select_streams", "v:0",
+      "-show_entries", "stream=width,height",
+      "-of", "csv=p=0",
+      filePath,
+    ], { stdio : ["ignore", "pipe", "ignore"] } );
+
+    let out = "";
+    proc.stdout.on( "data", ( chunk ) => {
+      out += String( chunk );
+    } );
+    proc.on( "error", () => resolve( { width : 0, height : 0 } ) );
+    proc.on( "close", () => {
+      const [ width, height ] = out.trim().split( "," ).map( ( n ) => Number( n ) );
+      resolve( {
+        width  : Number.isFinite( width ) ? width : 0,
+        height : Number.isFinite( height ) ? height : 0,
+      } );
+    } );
+  } );
+}
+
 /**
  * Encode media to a private temp file and publish it with a rename.
  *
@@ -331,6 +359,46 @@ function outputSize( frame: FrameDef ): { width: number; height: number } {
   };
 }
 
+/** Round up to the next even number — ffmpeg's yuv420p units. */
+function evenUp( value: number ): number {
+  return Math.max( 2, Math.ceil( value / 2 ) * 2 );
+}
+
+/** Per-slot framing the capture step stores (frame pixels, same as the strip). */
+type SlotAdjustment = { x: number; y: number; zoom: number; filter: string };
+
+/** Framing used for a slot the guest never touched. */
+const NEUTRAL_ADJUSTMENT: SlotAdjustment = {
+  x      : 0,
+  y      : 0,
+  zoom   : 1,
+  filter : "none",
+};
+
+/**
+ * Bleed drawn around each slot, matching `composeStrip`.
+ *
+ * The frame's keyed window is a hair larger than the slot rectangle, so a clip
+ * pasted at exactly the slot size leaves its own edge showing through as a dark
+ * outline. The clip is therefore laid down 8px wider on every side, under the
+ * frame artwork.
+ */
+const SLOT_PADDING = 8;
+
+/**
+ * `composeStrip`'s sharp `recomb` matrices, as ffmpeg channel mixers — the same
+ * numbers, so a filtered slot looks the same in the video as on the strip.
+ * (`vintage` adds sharp's brightness/saturation modulate; eq's brightness is an
+ * offset where sharp multiplies, so it is the close equivalent, not exact.)
+ */
+const SLOT_FILTERS: Record<string, string> = {
+  grayscale : "hue=s=0",
+  sepia     : "colorchannelmixer=0.393:0.769:0.189:0:0.349:0.686:0.168:0:0.272:0.534:0.131:0:0:0:0:1",
+  warm      : "colorchannelmixer=1.1:0:0:0:0:1:0:0:0:0:0.9:0:0:0:0:1",
+  cool      : "colorchannelmixer=0.9:0:0:0:0:1:0:0:0:0:1.15:0:0:0:0:1",
+  vintage   : "colorchannelmixer=0.95:0.05:0:0:0:0.9:0.1:0:0.05:0:0.85:0:0:0:0:1,eq=saturation=0.85:brightness=0.05",
+};
+
 /**
  * Output cadence. The clips are recorded at this rate and the canvas is built at
  * it too, so the mashup runs exactly as long as the countdown — a 24 fps slot
@@ -343,15 +411,22 @@ const OUT_FPS = 25
  * frame image, producing a single combined MP4. Each clip is scaled to
  * fit its slot rect; the output runs as long as the countdown the guest saw, so
  * a 5s countdown yields a 5s video.
+ *
+ * Framing mirrors `composeStrip` — the same 8px bleed, cover-fit, per-slot
+ * zoom/pan with white edges and per-slot colour filter — so the video matches the
+ * strip the guest takes away instead of showing a differently cropped take.
  */
 export async function generateCountdownMashup(
   sessionId: string,
   countdownFiles: string[],
   frameKey: string,
+  adjustments?: SlotAdjustment[],
 ): Promise<{ file: string; url: string } | null> {
   return singleFlight(
-    `countdown-mashup-${sessionId}.mp4`,
-    () => buildCountdownMashup( sessionId, countdownFiles, frameKey ),
+    // Framing is part of the output, so two requests with different adjustments
+    // must not share one encode.
+    `countdown-mashup-${sessionId}-${JSON.stringify( adjustments ?? [] )}.mp4`,
+    () => buildCountdownMashup( sessionId, countdownFiles, frameKey, adjustments ),
   )
 }
 
@@ -359,6 +434,7 @@ async function buildCountdownMashup(
   sessionId: string,
   countdownFiles: string[],
   frameKey: string,
+  adjustments?: SlotAdjustment[],
 ): Promise<{ file: string; url: string } | null> {
   if ( countdownFiles.length === 0 ) return null
 
@@ -380,8 +456,11 @@ async function buildCountdownMashup(
   // <index>` — rather than in the order the store happened to collect them.
   // Recordings land at different times, so store order is not index order, and
   // a missing or retaken clip must not shift its neighbours into the wrong
-  // frame window.
-  const clips = new Array<string | null>( frame.slots.length ).fill( null );
+  // frame window. Each clip's pixel size is read here too: the framing maths
+  // below needs it, exactly as composeStrip reads it with sharp.
+  const clips = new Array<{ name: string; width: number; height: number } | null>(
+    frame.slots.length,
+  ).fill( null );
 
   await Promise.all(
     countdownFiles.map( async ( file ) => {
@@ -389,26 +468,32 @@ async function buildCountdownMashup(
       const slot = Number( /-(\d+)\.mp4$/i.exec( name )?.[1] );
       if ( !Number.isInteger( slot ) || slot < 0 || slot >= clips.length ) return;
 
+      const clipPath = path.join( CAPTURES_DIR, name );
       // Probe first: a clip with too few frames makes ffmpeg fail the whole
       // graph, so a bad input is dropped rather than taking the mashup down.
-      const frames = await videoFrameCount( path.join( CAPTURES_DIR, name ) );
-      if ( frames >= MIN_CLIP_FRAMES ) clips[slot] = name;
+      if ( await videoFrameCount( clipPath ) < MIN_CLIP_FRAMES ) return;
+
+      const { width, height } = await videoSize( clipPath );
+      if ( !width || !height ) return;
+
+      clips[slot] = { name, width, height };
     } ),
   );
 
   if ( clips.every( ( clip ) => clip === null ) ) return null;
 
   // Build filter graph:
-  // 1. Black canvas at frame size
-  // 2. Scale clips into slots → overlay on canvas
-  // 3. Colorkey green (#00BF63) out of frame PNG
-  // 4. Overlay keyed frame on TOP → decorations cover clips
+  // 1. White backdrop at frame size
+  // 2. Fit each clip into its slot (bleed, zoom, pan, filter) → overlay
+  // 3. Overlay the keyed frame on TOP → decorations cover the clip edges
+  //    (the keying itself happened in resolveFrameImagePath, with sharp)
   const inputs: string[] = []
   const filters: string[] = []
 
-  // Synthetic black canvas [0:v]
+  // Synthetic backdrop [0:v] — white, the same paper colour composeStrip fills
+  // with, so a slot with no clip reads as an empty window instead of a hole.
   filters.push(
-    `color=c=black:s=${frame.width}x${frame.height}:d=9999:r=${OUT_FPS},format=rgba[canvas]`,
+    `color=c=white:s=${frame.width}x${frame.height}:d=9999:r=${OUT_FPS},format=rgba[canvas]`,
   )
   let lastOut = "canvas"
   let inputIdx = 0
@@ -418,21 +503,62 @@ async function buildCountdownMashup(
     if ( !clip ) continue
 
     const slot = frame.slots[i]
+    // The clip covers a padded box, not just the slot — see SLOT_PADDING. The box
+    // is rounded up to an even size so ffmpeg's yuv420p crop cannot shave a row
+    // off it (an odd 375px box came back as 374 and left a gap under the window).
+    const boxW = evenUp( slot.width + SLOT_PADDING * 2 )
+    const boxH = evenUp( slot.height + SLOT_PADDING * 2 )
+
+    // Mirror composeStrip's framing: cover-fit the padded box, apply the guest's
+    // zoom, then crop the box back out at their pan offset (in frame pixels).
+    const adj = adjustments?.[i] ?? NEUTRAL_ADJUSTMENT
+    const zoom = Number.isFinite( adj.zoom ) && adj.zoom > 0 ? adj.zoom : 1
+    const dx = Number.isFinite( adj.x ) ? adj.x : 0
+    const dy = Number.isFinite( adj.y ) ? adj.y : 0
+
+    const cover = Math.max( boxW / clip.width, boxH / clip.height )
+    // Even dimensions keep ffmpeg from nudging the scale output off the size we
+    // computed, which would put the crop below off by a pixel (and pad rejects a
+    // no-op). The sub-pixel aspect change matches composeStrip's own rounding.
+    const scaledW = evenUp( clip.width * cover * zoom )
+    const scaledH = evenUp( clip.height * cover * zoom )
+
+    const leftRaw = ( scaledW - boxW ) / 2 - dx
+    const topRaw = ( scaledH - boxH ) / 2 - dy
+    // Panning past the edge reveals paper, so the image is padded with white
+    // first and the box is cropped out of the padded frame. The capture step
+    // clamps the pan well inside the overflow, so this only fires for a framing
+    // the UI can't produce — which is why it is left out when unnecessary.
+    const leftPad = Math.max( 0, Math.ceil( -leftRaw ) )
+    const topPad = Math.max( 0, Math.ceil( -topRaw ) )
+    const padX = leftPad + Math.max( 0, Math.ceil( leftRaw + boxW - scaledW ) )
+    const padY = topPad + Math.max( 0, Math.ceil( topRaw + boxH - scaledH ) )
+    const padFilter = leftPad || topPad || padX || padY
+      ? `pad=iw+${padX}:ih+${padY}:${leftPad}:${topPad}:white,`
+      : ""
+    const cropX = leftPad + Math.max( 0, Math.floor( leftRaw ) )
+    const cropY = topPad + Math.max( 0, Math.floor( topRaw ) )
+
     // `inputIdx` counts only the clips we actually pass to ffmpeg, since the
     // canvas is synthetic and skipped clips are absent from the input list.
-    inputs.push( "-i", path.join( CAPTURES_DIR, clip ) )
+    inputs.push( "-i", path.join( CAPTURES_DIR, clip.name ) )
 
     const tag = `v${i}`
     // Live-view clips are small (the EOS M6 preview is 480×320) and a portrait
     // slot can stretch them ~2.5×, so scale with lanczos and add a touch of
     // sharpening to keep the upscaled clip from looking mushy.
+    const colour = SLOT_FILTERS[adj.filter] ?? ""
     filters.push(
-      `[${inputIdx}:v]scale=${slot.width}:${slot.height}:force_original_aspect_ratio=increase:flags=lanczos,crop=${slot.width}:${slot.height},unsharp=5:5:0.5:5:5:0,setsar=1,fps=${OUT_FPS},format=rgba[${tag}]`,
+      `[${inputIdx}:v]scale=${scaledW}:${scaledH}:flags=lanczos,` +
+      padFilter +
+      `crop=${boxW}:${boxH}:${cropX}:${cropY},` +
+      "unsharp=5:5:0.5:5:5:0,format=rgba," +
+      `${colour ? `${colour},` : ""}setsar=1,fps=${OUT_FPS}[${tag}]`,
     )
 
     const outTag = `o${i}`
     filters.push(
-      `[${lastOut}][${tag}]overlay=${slot.left}:${slot.top}:shortest=1[${outTag}]`,
+      `[${lastOut}][${tag}]overlay=${slot.left - SLOT_PADDING}:${slot.top - SLOT_PADDING}:shortest=1[${outTag}]`,
     )
     lastOut = outTag
     inputIdx++
@@ -445,7 +571,11 @@ async function buildCountdownMashup(
   filters.push(
     `[${frameIdx}:v]format=rgba[fk]`,
   )
-  filters.push( `[${lastOut}][fk]overlay=0:0,scale=${outW}:${outH}:flags=lanczos,format=yuv420p[out]` )
+  // setsar=1 after the final scale: scaling 1333×1999 down to 1332×1998 keeps
+  // the source SAR, which would advertise a 1333:1999 display aspect ratio.
+  filters.push(
+    `[${lastOut}][fk]overlay=0:0,scale=${outW}:${outH}:flags=lanczos,setsar=1,format=yuv420p[out]`,
+  )
 
   const filterComplex = filters.join( ";" )
 
@@ -472,10 +602,17 @@ async function buildCountdownMashup(
       "-movflags", "+faststart",
       outPath,
     ]
-    const proc = spawn( "ffmpeg", args, { stdio : "inherit" } )
+    // ffmpeg's own complaint is the only useful thing when the graph is wrong,
+    // so keep its stderr and hand the tail back with the failure.
+    const proc = spawn( "ffmpeg", args, { stdio : ["ignore", "ignore", "pipe"] } )
+
+    let stderr = ""
+    proc.stderr.on( "data", ( chunk ) => {
+      stderr = ( stderr + String( chunk ) ).slice( -4000 )
+    } )
     proc.on( "close", ( code ) => {
       if ( code === 0 ) resolve()
-      else reject( new Error( `ffmpeg mashup exited with ${code}` ) )
+      else reject( new Error( `ffmpeg mashup exited with ${code}: ${stderr.trim()}` ) )
     } )
   } ) )
 

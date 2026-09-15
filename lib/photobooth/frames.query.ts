@@ -240,16 +240,24 @@ export async function generateSessionVideo( {
   files,
   countdownFiles,
   frameKey,
+  adjustments,
 }: {
   sessionId: string
   files: string[]
   countdownFiles?: string[]
   frameKey?: string
+  adjustments?: Array<{ x: number; y: number; zoom: number; filter: string }>
 } ): Promise<{ file: string; url: string } | null> {
   const response = await fetch( '/api/captures/video', {
     method  : 'POST',
     headers : { 'Content-Type' : 'application/json' },
-    body    : JSON.stringify( { sessionId, files, countdownFiles, frameKey } ),
+    body    : JSON.stringify( {
+      sessionId,
+      files,
+      countdownFiles,
+      frameKey,
+      adjustments,
+    } ),
   } )
   // 501 means ffmpeg not available — return null gracefully
   if ( response.status === 501 ) return null

@@ -22,12 +22,16 @@ const ID_RE = /^[a-z0-9]+$/i;
  *   - files:          ordered list of shot filenames (for slideshow)
  *   - countdownFiles: ordered list of countdown clip filenames (for mashup)
  *   - frameKey:       frame identifier (required for countdown mashup)
+ *   - adjustments:    per-slot framing from the capture/filter steps — the same
+ *                     `{ x, y, zoom, filter }[]` the compose route receives, so
+ *                     the video frames each clip like the strip does
  */
 export async function POST( request: Request ) {
   let files: string[] = [];
   let countdownFiles: string[] = [];
   let sessionId = "";
   let frameKey = "";
+  let adjustments: { x: number; y: number; zoom: number; filter: string }[] = [];
   try {
     const body = await request.json();
     files = Array.isArray( body.files ) ? body.files.map( String ) : [];
@@ -36,6 +40,14 @@ export async function POST( request: Request ) {
       : [];
     sessionId = String( body.sessionId ?? "" );
     frameKey = String( body.frameKey ?? "" );
+    adjustments = Array.isArray( body.adjustments )
+      ? body.adjustments.map( ( adj: Record<string, unknown> ) => ( {
+        x      : Number( adj?.x ) || 0,
+        y      : Number( adj?.y ) || 0,
+        zoom   : Number( adj?.zoom ) || 1,
+        filter : String( adj?.filter ?? "none" ),
+      } ) )
+      : [];
   } catch {
     return Response.json( { error : "Invalid JSON body" }, { status : 400 } );
   }
@@ -56,6 +68,7 @@ export async function POST( request: Request ) {
         sessionId,
         countdownFiles,
         frameKey,
+        adjustments,
       );
       // A clip may have been unusable (e.g. recorded before the preview was
       // live). Fall through to the slideshow rather than failing the request.

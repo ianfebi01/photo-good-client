@@ -276,51 +276,75 @@ export async function generateSessionLoopVideo( {
 }
 
 /**
- * Upload a countdown video clip recorded during the 3s countdown.
+ * Record the countdown clip for one shot, server-side.
  *
- * Hi-res MP4 when the browser can mux H.264 (no server conversion needed),
- * webm otherwise — the extension tells the upload route which path to take.
+ * ffmpeg reads the live preview the booth is showing (`streamUrl`) and encodes
+ * the countdown window straight to MP4/H.264 — no canvas, no MediaRecorder, and
+ * no second encode generation in the browser.
+ *
+ * Returns null when the server can't record (no ffmpeg, or nothing usable came
+ * off the stream): the capture still works, the result video just falls back to
+ * the image slideshow.
  */
-export async function uploadCountdownClip( {
+export async function recordCountdownClip( {
   sessionId,
   index,
-  blob,
+  durationSec,
+  streamUrl,
 }: {
   sessionId: string
   index: number
-  blob: Blob
-} ): Promise<{ file: string; url: string }> {
-  const ext = blob.type.startsWith( 'video/mp4' ) ? 'mp4' : 'webm'
-
-  const form = new FormData()
-  form.append( 'file', blob, `countdown-${sessionId}-${index}.${ext}` )
-  form.append( 'sessionId', sessionId )
-  form.append( 'index', String( index ) )
-  form.append( 'kind', 'countdown' )
-
-  const response = await fetch( '/api/captures/upload', {
-    method : 'POST',
-    body   : form,
-  } )
-
-  return parseJson( response, 'Countdown video upload failed' )
-}
-
-/** Convert a recorded countdown clip (webm) to a downloadable MP4. */
-export async function convertCountdownClip( {
-  file,
-}: {
-  file: string
+  durationSec: number
+  streamUrl: string
 } ): Promise<{ file: string; url: string } | null> {
-  const response = await fetch( '/api/captures/countdown-mp4', {
+  const response = await fetch( '/api/captures/countdown', {
     method  : 'POST',
     headers : { 'Content-Type' : 'application/json' },
-    body    : JSON.stringify( { file } ),
+    body    : JSON.stringify( { sessionId, index, durationSec, streamUrl } ),
   } )
-  // 501 means ffmpeg not available — return null gracefully
-  if ( response.status === 501 ) return null
+  // 501 = no ffmpeg, 422 = nothing usable recorded — both mean "no clip".
+  if ( response.status === 501 || response.status === 422 ) return null
 
-  return parseJson( response, 'MP4 conversion failed' )
+  return parseJson( response, 'Countdown recording failed' )
+}
+
+// ── In-flight countdown recordings ───────────────────────────────
+//
+// A recording only finishes when ffmpeg stops reading, and the preview goes
+// quiet while the still capture holds the camera — so the clip lands a couple of
+// seconds after the countdown ends. The result step can be reached before that,
+// which would build the mashup with that slot missing, so it waits for these.
+
+let _recording = 0
+let _idle: Promise<void> | null = null
+let _resolveIdle: ( () => void ) | null = null
+
+/** Track a recording so `whenCountdownClipsSettled()` can wait for it. */
+export function trackCountdownClip<T>( recording: Promise<T> ): Promise<T> {
+  _recording += 1
+  if ( !_idle ) {
+    _idle = new Promise<void>( ( resolve ) => {
+      _resolveIdle = resolve
+    } )
+  }
+
+  const done = () => {
+    _recording -= 1
+    if ( _recording === 0 && _resolveIdle ) {
+      _resolveIdle()
+      _idle = null
+      _resolveIdle = null
+    }
+  }
+  recording.then( done, done )
+
+  return recording
+}
+
+/** Resolve once no countdown recording is still in flight. */
+export async function whenCountdownClipsSettled(): Promise<void> {
+  // Another recording can start while awaiting, so re-check until none is left.
+  while ( _idle ) await _idle
 }
 
 // ── Server-proxied session sync (API key stays server-side) ─────────

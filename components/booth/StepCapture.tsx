@@ -16,124 +16,27 @@ import { FramePreview } from './FramePreview'
 import { ShutterControls } from './ShutterControls'
 import { StepHeader } from './StepHeader'
 import { getCameraPreviewUrl } from '@/lib/photobooth/frames.query'
-import { uploadCountdownClip } from '@/lib/photobooth/frames.query'
+import { recordCountdownClip } from '@/lib/photobooth/frames.query'
+import { trackCountdownClip } from '@/lib/photobooth/frames.query'
 import { ChevronRight } from 'lucide-react'
 
-// ── Countdown clip recording ────────────────────────────────────────
+// ── Countdown clip ──────────────────────────────────────────────────
 //
-// The clip is recorded from the live MJPEG canvas and uploaded as MP4/H.264
-// whenever the browser can mux it, so the upload needs no server-side
-// conversion and the file plays/downloads everywhere.
+// The clip is recorded on the server: ffmpeg reads the live MJPEG preview this
+// page is showing and encodes the countdown window straight to MP4/H.264 (see
+// /api/captures/countdown). The browser keeps no canvas and no MediaRecorder —
+// one encode generation instead of two, no dropped frames, and nothing for the
+// kiosk's CPU to do while the guest poses.
 //
-// The recorded size follows the live frame *at its native resolution* — the
-// canvas is never upscaled. The EOS M6's PTP live view is only 480×320 (see
-// camera-service), and stretching it adds no detail while forcing the mashup
-// to resample a second time. A larger live view (e.g. an HDMI capture device)
-// is recorded at its own resolution, capped by RECORD_MAX_LONG_EDGE.
-
-/** Never record larger than this long edge; the source is never upscaled. */
-const RECORD_MAX_LONG_EDGE = 1920
-/** Capture cadence of the recorded canvas. */
-const RECORD_FPS = 30
-
-/** Round to an even integer — H.264 requires even dimensions. */
-function toEven( value: number ): number {
-  return Math.max( 2, Math.round( value / 2 ) * 2 )
-}
-
-/** Recording size for a live frame of `srcW`×`srcH` (downscale only). */
-function recordingSize( srcW: number, srcH: number ) {
-  const factor = Math.min( 1, RECORD_MAX_LONG_EDGE / Math.max( srcW, srcH ) )
-
-  return {
-    width  : toEven( srcW * factor ),
-    height : toEven( srcH * factor ),
-  }
-}
+// Recording stays at the stream's native size and is never upscaled: the EOS
+// M6's PTP live view is only 480×320, so stretching it would add no detail and
+// only force the mashup to resample a second time.
 
 /**
- * Bitrate budget for the recording — ~0.15 bits per pixel per second, so a
- * 1080p30 clip gets ~9 Mbps and the 480×320 live view gets a generous
- * 1.2 Mbps rather than the ~0.7 Mbps that formula alone would allow.
+ * Seconds counted down before each shot — and the length of its clip, which
+ * also sets the result video's duration: the mashup runs as long as its clips.
  */
-function recordingBitrate( width: number, height: number ): number {
-  const budget = width * height * RECORD_FPS * 0.15
-
-  return Math.round( Math.min( 12_000_000, Math.max( 1_200_000, budget ) ) )
-}
-
-/** MediaRecorder mime types, best first: MP4/H.264, then webm fallbacks. */
-const RECORD_MIME_CANDIDATES = [
-  'video/mp4;codecs=avc1.640028',
-  'video/mp4;codecs=avc1.4d002a',
-  'video/mp4;codecs=avc1.42E01E',
-  'video/mp4;codecs=avc1',
-  'video/mp4',
-  'video/webm;codecs=vp9',
-  'video/webm;codecs=vp8',
-  'video/webm',
-]
-
-/** First supported recording mime, or null when recording isn't possible. */
-function pickRecordingMime(): string | null {
-  if ( typeof MediaRecorder === 'undefined' ) return null
-
-  return (
-    RECORD_MIME_CANDIDATES.find( ( mime ) =>
-      MediaRecorder.isTypeSupported( mime ),
-    ) ?? null
-  )
-}
-
-/** Draw the live MJPEG img onto a canvas every frame so we can record it. */
-function useRecordingCanvas( active: boolean ) {
-  const canvasRef = useRef<HTMLCanvasElement | null>( null )
-  const paintedRef = useRef( false )
-  const rafRef = useRef<number | null>( null )
-  const sizeRef = useRef<{ width: number; height: number } | null>( null )
-
-  useEffect( () => {
-    if ( !active ) {
-      if ( rafRef.current !== null ) {
-        cancelAnimationFrame( rafRef.current )
-        rafRef.current = null
-      }
-
-      return
-    }
-
-    const tick = () => {
-      const canvas = canvasRef.current
-      const img = document.querySelector<HTMLImageElement>(
-        'img[data-photobooth-live]',
-      )
-      if ( canvas && img && img.naturalWidth > 0 ) {
-        // The recording runs at the live frame's native size (capped), derived
-        // once. Assigning width/height clears the bitmap, so the size settles
-        // before recording starts and never changes after.
-        if ( !sizeRef.current ) {
-          sizeRef.current = recordingSize( img.naturalWidth, img.naturalHeight )
-        }
-        const { width, height } = sizeRef.current
-        if ( canvas.width !== width ) canvas.width = width
-        if ( canvas.height !== height ) canvas.height = height
-        const ctx = canvas.getContext( '2d' )
-        if ( ctx ) {
-          ctx.drawImage( img, 0, 0, width, height )
-          paintedRef.current = true
-        }
-      }
-      rafRef.current = requestAnimationFrame( tick )
-    }
-    rafRef.current = requestAnimationFrame( tick )
-
-    return () => {
-      if ( rafRef.current !== null ) cancelAnimationFrame( rafRef.current )
-    }
-  }, [active] )
-
-  return { canvasRef, paintedRef }
-}
+const COUNTDOWN_SECS = 5
 
 export function StepCapture() {
   const {
@@ -169,113 +72,38 @@ export function StepCapture() {
 
   const [countdown, setCountdown] = useState<number | null>( null )
 
-  // ── Countdown video recording ──────────────────────────────────────
-  // The painter runs for the whole capture step — not just while the countdown
-  // is up — so the canvas already holds a live frame when the user taps capture.
-  // A MediaRecorder attached to a canvas that has never painted captures no
-  // frames at all, which produced unusable countdown clips.
-  const mediaRecorderRef = useRef<MediaRecorder | null>( null )
-  const recordedChunksRef = useRef<Blob[]>( [] )
-  const recordingMimeRef = useRef<string | null>( null )
-  const recordingIndexRef = useRef<number>( 0 )
-  const { canvasRef: recordingCanvasRef, paintedRef: recordingPaintedRef } =
-    useRecordingCanvas( true )
+  // ── Countdown clip ─────────────────────────────────────────────────
+  // Recording happens on the server (see /api/captures/countdown): ffmpeg
+  // reads the stream this preview is showing and encodes the countdown window
+  // to MP4. The browser only kicks it off and stores the clip that comes back.
+  const recordCountdown = useCallback( ( index: number ) => {
+    void trackCountdownClip(
+      recordCountdownClip( {
+        sessionId   : useBoothStore.getState().ensureSessionId(),
+        index,
+        durationSec : COUNTDOWN_SECS,
+        streamUrl   : liveSrc,
+      } ),
+    )
+      .then( ( clip ) => {
+        if ( !clip ) {
+          // eslint-disable-next-line no-console
+          console.warn( `Countdown clip ${index} recorded no usable frames` )
 
-  /** How long to wait for the first live frame (50 ms × this) before giving up. */
-  const PAINT_WAIT_ATTEMPTS = 20
-
-  const startRecording = useCallback( () => {
-    let attempts = 0
-
-    const begin = () => {
-      const canvas = recordingCanvasRef.current
-      if ( !canvas || mediaRecorderRef.current ) return
-
-      // Hold off until the live frame has landed. Recording earlier yields a
-      // clip with no frames, which the upload is right to reject.
-      if ( !recordingPaintedRef.current ) {
-        attempts += 1
-        if ( attempts <= PAINT_WAIT_ATTEMPTS ) window.setTimeout( begin, 50 )
-
-        return
-      }
-
-      const mime = pickRecordingMime()
-      if ( !mime ) return
-
-      let stream: MediaStream
-      try {
-        stream = canvas.captureStream( RECORD_FPS )
-      } catch {
-        return
-      }
-      recordedChunksRef.current = []
-      try {
-        const recorder = new MediaRecorder( stream, {
-          mimeType           : mime,
-          videoBitsPerSecond : recordingBitrate( canvas.width, canvas.height ),
+          return
+        }
+        useBoothStore.getState().addCountdownClip( {
+          file : clip.file,
+          url  : clip.url,
         } )
-        recordingMimeRef.current = mime
-        recorder.ondataavailable = ( e ) => {
-          if ( e.data.size > 0 ) recordedChunksRef.current.push( e.data )
-        }
-        recorder.start( 250 )
-        mediaRecorderRef.current = recorder
-      } catch {
-        // MediaRecorder not supported — silently skip recording
-      }
-    }
-
-    begin()
-  }, [recordingCanvasRef, recordingPaintedRef] )
-
-  const stopAndUploadRecording = useCallback(
-    async ( sessionId: string, index: number ) => {
-      const recorder = mediaRecorderRef.current
-      if ( !recorder || recorder.state === 'inactive' ) return
-      mediaRecorderRef.current = null
-
-      return new Promise<void>( ( resolve ) => {
-        recorder.onstop = async () => {
-          // Tag the blob with what was actually recorded — the upload names the
-          // file from this type and skips conversion for MP4.
-          const mime = recordingMimeRef.current ?? 'video/webm'
-          const blob = new Blob( recordedChunksRef.current, { type : mime } )
-          recordedChunksRef.current = []
-          recordingMimeRef.current = null
-          if ( blob.size < 1000 ) {
-            resolve()
-
-            return
-          }
-          try {
-            const result = await uploadCountdownClip( {
-              sessionId,
-              index,
-              blob,
-            } )
-            useBoothStore.getState().addCountdownClip( {
-              file : result.file,
-              url  : result.url,
-            } )
-          } catch {
-            // Upload failed silently — strip still works
-          }
-          resolve()
-        }
-        recorder.stop()
       } )
-    },
-    [],
-  )
-
-  // Stop recording and upload when capture completes (pending is set)
-  useEffect( () => {
-    if ( pending && mediaRecorderRef.current ) {
-      const sessionId = useBoothStore.getState().sessionId
-      stopAndUploadRecording( sessionId, recordingIndexRef.current )
-    }
-  }, [pending, stopAndUploadRecording] )
+      // A missing clip is not fatal — the capture still works and the result
+      // video falls back to the image slideshow — but it should be visible.
+      .catch( ( err ) => {
+        // eslint-disable-next-line no-console
+        console.warn( `Countdown clip ${index} failed:`, err )
+      } )
+  }, [liveSrc] )
 
   const canCapture =
     !busy &&
@@ -347,17 +175,17 @@ export function StepCapture() {
   const handleSnap = () => {
     setTargetSlotIdx( photos.length )
 
-    // Kiosk config — skip the 3-2-1 countdown and shoot immediately.
+    // Kiosk config — skip the countdown and shoot immediately.
     if ( disableCountdown ) {
       takeShot()
 
       return
     }
 
-    // Record the countdown the user is about to see, starting on the click.
-    recordingIndexRef.current = photos.length
-    startRecording()
-    setCountdown( 3 )
+    // Kick the recording off first, so the clip covers exactly the countdown
+    // the guest is about to see. It lands in the store in the background.
+    recordCountdown( photos.length )
+    setCountdown( COUNTDOWN_SECS )
   }
 
   const handleAcceptPending = async () => {
@@ -486,16 +314,6 @@ export function StepCapture() {
     }
   }, [handleMouseMove, handleMouseUp, handleTouchMove, handleTouchEnd] )
 
-  // Clean up MediaRecorder on unmount
-  useEffect( () => {
-    return () => {
-      const recorder = mediaRecorderRef.current
-      if ( recorder && recorder.state !== 'inactive' ) {
-        recorder.stop()
-      }
-    }
-  }, [] )
-
   const errorBanner = error ? (
     <div className="shrink-0 p-4 rounded-xl bg-destructive/10 text-destructive text-sm font-medium border border-destructive/20 font-sans">
       {error}
@@ -590,13 +408,6 @@ export function StepCapture() {
       </div>
 
       {errorBanner}
-
-      {/* Hidden canvas for countdown video recording */}
-      <canvas
-        ref={recordingCanvasRef}
-        className="hidden"
-        aria-hidden="true"
-      />
     </div>
   )
 }

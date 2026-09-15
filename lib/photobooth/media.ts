@@ -5,13 +5,13 @@ import { readFile, writeFile, mkdir, rename, unlink } from "node:fs/promises";
 import path from "node:path";
 import sharp from "sharp";
 
-import { CAPTURES_DIR, getFrame, externalFetch } from "./config";
+import { CAPTURES_DIR, getFrame, externalFetch, type FrameDef } from "./config";
 import { clearGreenPixels } from "./slots";
 
 // ── Helpers ────────────────────────────────────────────────────────
 
-/** Resolve an ffmpeg binary; returns null when unavailable. */
-async function ffmpegAvailable(): Promise<boolean> {
+/** Resolve an ffmpeg binary; returns false when unavailable. */
+export async function ffmpegAvailable(): Promise<boolean> {
   return new Promise( ( resolve ) => {
     const proc = spawn( "ffmpeg", ["-version"], { stdio : "ignore" } );
     proc.on( "close", ( code ) => resolve( code === 0 ) );
@@ -59,6 +59,48 @@ export async function videoFrameCount( filePath: string ): Promise<number> {
 const MIN_CLIP_FRAMES = 2;
 
 /**
+ * Encode media to a private temp file and publish it with a rename.
+ *
+ * The result page can ask for the same video twice — React StrictMode re-runs
+ * the generation effect in dev, and a retry can overlap a slow encode — and two
+ * ffmpeg processes writing one path interleave their output. The file that comes
+ * out still reports a valid duration but decodes as garbage, which is exactly
+ * what a player shows as a blank video. `build` writes to the path it is handed;
+ * the rename publishes it only once it is complete.
+ */
+async function writeMediaAtomically(
+  vidName: string,
+  build: ( outPath: string ) => Promise<void>,
+): Promise<void> {
+  const ext = path.extname( vidName );
+  const outPath = path.join(
+    CAPTURES_DIR,
+    `.${path.basename( vidName, ext )}-${Date.now()}.tmp${ext}`,
+  );
+
+  try {
+    await build( outPath );
+    await rename( outPath, path.join( CAPTURES_DIR, vidName ) );
+  } catch ( err ) {
+    await unlink( outPath ).catch( () => {} );
+    throw err;
+  }
+}
+
+/** Encoding jobs by output name — a duplicate request joins the running one. */
+const _encoding = new Map<string, Promise<unknown>>();
+
+function singleFlight<T>( vidName: string, run: () => Promise<T> ): Promise<T> {
+  const running = _encoding.get( vidName ) as Promise<T> | undefined;
+  if ( running ) return running;
+
+  const job = run().finally( () => _encoding.delete( vidName ) );
+  _encoding.set( vidName, job );
+
+  return job;
+}
+
+/**
  * Writes a text file listing absolute paths to every image, one per line —
  * ffmpeg's concat demuxer reads this to sequence frames without re-encoding
  * each one through a complex filtergraph.
@@ -86,21 +128,23 @@ export async function generateGif(
   sessionId: string,
   files: string[],
 ): Promise<{ file: string; url: string }> {
-  await mkdir( CAPTURES_DIR, { recursive : true } );
+  const gifName = `anim-${sessionId}.gif`;
 
-  const baseName = `anim-${sessionId}`;
-  const gifName = `${baseName}.gif`;
-  const outPath = path.join( CAPTURES_DIR, gifName );
+  return singleFlight( gifName, async () => {
+    await mkdir( CAPTURES_DIR, { recursive : true } );
 
-  const hasFfmpeg = await ffmpegAvailable();
+    const hasFfmpeg = await ffmpegAvailable();
 
-  if ( hasFfmpeg && files.length > 0 ) {
-    await generateGifFfmpeg( files, outPath );
-  } else {
-    await generateGifSharp( files, outPath );
-  }
+    await writeMediaAtomically( gifName, async ( outPath ) => {
+      if ( hasFfmpeg && files.length > 0 ) {
+        await generateGifFfmpeg( files, outPath );
+      } else {
+        await generateGifSharp( files, outPath );
+      }
+    } );
 
-  return { file : gifName, url : `/captures/${gifName}` };
+    return { file : gifName, url : `/captures/${gifName}` };
+  } );
 }
 
 async function generateGifFfmpeg( files: string[], outPath: string ) {
@@ -223,54 +267,95 @@ export async function generateSlideshowVideo(
   await mkdir( CAPTURES_DIR, { recursive : true } );
 
   const vidName = `slideshow-${sessionId}.mp4`;
-  const outPath = path.join( CAPTURES_DIR, vidName );
-  const listPath = path.join( CAPTURES_DIR, `.vid-list-${Date.now()}.txt` );
-  await writeConcatList( files, listPath );
 
-  // Use concat demuxer → each image shown for 1.5 s with a smooth zoom effect
-  await new Promise<void>( ( resolve, reject ) => {
-    const proc = spawn( "ffmpeg", [
-      "-y",
-      "-f", "concat",
-      "-safe", "0",
-      "-i", listPath,
-      "-vf",
-      [
-        `scale=${VID_W}:-2:force_original_aspect_ratio=decrease`,
-        "fps=24",
-        "format=yuv420p",
-      ].join( "," ),
-      "-c:v", "libx264",
-      "-preset", "fast",
-      "-crf", "23",
-      "-pix_fmt", "yuv420p",
-      "-profile:v", "main",
-      "-level", "4.0",
-      "-tag:v", "avc1",
-      "-movflags", "+faststart",
-      outPath,
-    ], { stdio : "inherit" } );
-    proc.on( "close", ( code ) => {
-      if ( code === 0 ) resolve();
-      else reject( new Error( `ffmpeg video pass exited with ${code}` ) );
-    } );
+  return singleFlight( vidName, async () => {
+    await mkdir( CAPTURES_DIR, { recursive : true } );
+
+    const listPath = path.join( CAPTURES_DIR, `.vid-list-${Date.now()}.txt` );
+    await writeConcatList( files, listPath );
+
+    try {
+      // Concat demuxer → each image shown for 1.5 s with a smooth zoom effect
+      await writeMediaAtomically(
+        vidName,
+        ( outPath ) => new Promise<void>( ( resolve, reject ) => {
+          const proc = spawn( "ffmpeg", [
+            "-y",
+            "-f", "concat",
+            "-safe", "0",
+            "-i", listPath,
+            "-vf",
+            [
+              `scale=${VID_W}:-2:force_original_aspect_ratio=decrease`,
+              "fps=24",
+              "format=yuv420p",
+            ].join( "," ),
+            "-c:v", "libx264",
+            "-preset", "fast",
+            "-crf", "23",
+            "-pix_fmt", "yuv420p",
+            "-profile:v", "main",
+            "-level", "4.0",
+            "-tag:v", "avc1",
+            "-movflags", "+faststart",
+            outPath,
+          ], { stdio : "inherit" } );
+          proc.on( "close", ( code ) => {
+            if ( code === 0 ) resolve();
+            else reject( new Error( `ffmpeg video pass exited with ${code}` ) );
+          } );
+        } ),
+      );
+    } finally {
+      await unlink( listPath ).catch( () => {} );
+    }
+
+    return { file : vidName, url : `/captures/${vidName}` };
   } );
-
-  try {
-    await import( "node:fs/promises" ).then( ( m ) => m.unlink( listPath ) ); 
-  } catch { /* ok */ }
-
-  return { file : vidName, url : `/captures/${vidName}` };
 }
 
 // ── Countdown video mashup onto frame ─────────────────────────────
 
 /**
- * Overlay each countdown clip (webm or mp4) into its corresponding slot on the
+ * Result video canvas — the frame's own pixels, rounded down to even numbers.
+ *
+ * libx264 with yuv420p needs both dimensions even, so a 1333×1999 frame can't be
+ * encoded as it stands. Encoding at the frame's size (rather than the 4×6 print
+ * size) keeps the artwork unresampled, so decorations stay as crisp as the strip
+ * the guest prints from the same design.
+ */
+function outputSize( frame: FrameDef ): { width: number; height: number } {
+  return {
+    width  : Math.floor( frame.width / 2 ) * 2,
+    height : Math.floor( frame.height / 2 ) * 2,
+  };
+}
+
+/**
+ * Output cadence. The clips are recorded at this rate and the canvas is built at
+ * it too, so the mashup runs exactly as long as the countdown — a 24 fps slot
+ * chain over a 25 fps canvas rounded 5.00s down to 4.96s.
+ */
+const OUT_FPS = 25
+
+/**
+ * Overlay each countdown clip (MP4/H.264) into its corresponding slot on the
  * frame image, producing a single combined MP4. Each clip is scaled to
- * fit its slot rect; the output is as long as the shortest clip.
+ * fit its slot rect; the output runs as long as the countdown the guest saw, so
+ * a 5s countdown yields a 5s video.
  */
 export async function generateCountdownMashup(
+  sessionId: string,
+  countdownFiles: string[],
+  frameKey: string,
+): Promise<{ file: string; url: string } | null> {
+  return singleFlight(
+    `countdown-mashup-${sessionId}.mp4`,
+    () => buildCountdownMashup( sessionId, countdownFiles, frameKey ),
+  )
+}
+
+async function buildCountdownMashup(
   sessionId: string,
   countdownFiles: string[],
   frameKey: string,
@@ -289,21 +374,26 @@ export async function generateCountdownMashup(
   const frameImagePath = await resolveFrameImagePath( frame.key )
 
   const vidName = `countdown-mashup-${sessionId}.mp4`
-  const outPath = path.join( CAPTURES_DIR, vidName )
+  const { width: outW, height: outH } = outputSize( frame )
 
-  // Probe before building the filter graph: a clip that captured too few frames
-  // makes ffmpeg fail the whole graph, and one bad input would otherwise take
-  // the entire mashup down. Indices are preserved so a skipped clip simply
-  // leaves its slot black instead of shifting the others.
-  const clips = await Promise.all(
-    countdownFiles
-      .slice( 0, frame.slots.length )
-      .map( async ( file ) => {
-        const name = path.basename( file );
-        const frames = await videoFrameCount( path.join( CAPTURES_DIR, name ) );
+  // Place each clip in the slot its own filename names — `countdown-<session>-
+  // <index>` — rather than in the order the store happened to collect them.
+  // Recordings land at different times, so store order is not index order, and
+  // a missing or retaken clip must not shift its neighbours into the wrong
+  // frame window.
+  const clips = new Array<string | null>( frame.slots.length ).fill( null );
 
-        return frames >= MIN_CLIP_FRAMES ? name : null;
-      } ),
+  await Promise.all(
+    countdownFiles.map( async ( file ) => {
+      const name = path.basename( file );
+      const slot = Number( /-(\d+)\.mp4$/i.exec( name )?.[1] );
+      if ( !Number.isInteger( slot ) || slot < 0 || slot >= clips.length ) return;
+
+      // Probe first: a clip with too few frames makes ffmpeg fail the whole
+      // graph, so a bad input is dropped rather than taking the mashup down.
+      const frames = await videoFrameCount( path.join( CAPTURES_DIR, name ) );
+      if ( frames >= MIN_CLIP_FRAMES ) clips[slot] = name;
+    } ),
   );
 
   if ( clips.every( ( clip ) => clip === null ) ) return null;
@@ -318,7 +408,7 @@ export async function generateCountdownMashup(
 
   // Synthetic black canvas [0:v]
   filters.push(
-    `color=c=black:s=${frame.width}x${frame.height}:d=9999,format=rgba[canvas]`,
+    `color=c=black:s=${frame.width}x${frame.height}:d=9999:r=${OUT_FPS},format=rgba[canvas]`,
   )
   let lastOut = "canvas"
   let inputIdx = 0
@@ -337,7 +427,7 @@ export async function generateCountdownMashup(
     // slot can stretch them ~2.5×, so scale with lanczos and add a touch of
     // sharpening to keep the upscaled clip from looking mushy.
     filters.push(
-      `[${inputIdx}:v]scale=${slot.width}:${slot.height}:force_original_aspect_ratio=increase:flags=lanczos,crop=${slot.width}:${slot.height},unsharp=5:5:0.5:5:5:0,setsar=1,fps=24,format=rgba[${tag}]`,
+      `[${inputIdx}:v]scale=${slot.width}:${slot.height}:force_original_aspect_ratio=increase:flags=lanczos,crop=${slot.width}:${slot.height},unsharp=5:5:0.5:5:5:0,setsar=1,fps=${OUT_FPS},format=rgba[${tag}]`,
     )
 
     const outTag = `o${i}`
@@ -355,22 +445,29 @@ export async function generateCountdownMashup(
   filters.push(
     `[${frameIdx}:v]format=rgba[fk]`,
   )
-  filters.push( `[${lastOut}][fk]overlay=0:0,scale=720:-2,format=yuv420p[out]` )
+  filters.push( `[${lastOut}][fk]overlay=0:0,scale=${outW}:${outH}:flags=lanczos,format=yuv420p[out]` )
 
   const filterComplex = filters.join( ";" )
 
-  await new Promise<void>( ( resolve, reject ) => {
+  await writeMediaAtomically( vidName, ( outPath ) => new Promise<void>( ( resolve, reject ) => {
     const args = [
       "-y",
       ...inputs,
       "-filter_complex", filterComplex,
       "-map", "[out]",
       "-c:v", "libx264",
-      "-preset", "fast",
-      "-crf", "23",
+      // Near-lossless: this is the last encode generation, and the clips inside
+      // it are already upscaled live-view frames. Measured against a lossless
+      // master of the same composite: CRF 15 is already SSIM 0.9992, CRF 12 is
+      // 0.9995 at ~35% more bytes — a cheap margin for real camera motion.
+      "-preset", "slow",
+      "-crf", "12",
       "-pix_fmt", "yuv420p",
       "-profile:v", "main",
-      "-level", "4.0",
+      // Level 5.0 is the lowest level whose frame-size limit covers this canvas:
+      // 1332×1998 is 10,500 macroblocks per frame, past level 4.2's 8,704 (and
+      // level 4.0's 8,192).
+      "-level", "5.0",
       "-tag:v", "avc1",
       "-movflags", "+faststart",
       outPath,
@@ -380,7 +477,7 @@ export async function generateCountdownMashup(
       if ( code === 0 ) resolve()
       else reject( new Error( `ffmpeg mashup exited with ${code}` ) )
     } )
-  } )
+  } ) )
 
   return { file : vidName, url : `/captures/${vidName}` }
 }
@@ -449,6 +546,13 @@ export async function generateLoopVideo(
   sessionId: string,
   files: string[],
 ): Promise<{ file: string; url: string } | null> {
+  return singleFlight( `loop-${sessionId}.mp4`, () => buildLoopVideo( sessionId, files ) )
+}
+
+async function buildLoopVideo(
+  sessionId: string,
+  files: string[],
+): Promise<{ file: string; url: string } | null> {
   if ( files.length === 0 ) return null
 
   const hasFfmpeg = await ffmpegAvailable()
@@ -457,7 +561,6 @@ export async function generateLoopVideo(
   await mkdir( CAPTURES_DIR, { recursive : true } )
 
   const vidName = `loop-${sessionId}.mp4`
-  const outPath = path.join( CAPTURES_DIR, vidName )
 
   // Build inputs: each image looped for SECS_PER_PHOTO seconds
   const inputs: string[] = []
@@ -480,7 +583,7 @@ export async function generateLoopVideo(
     "format=yuv420p",
   ].join( "," )
 
-  await new Promise<void>( ( resolve, reject ) => {
+  await writeMediaAtomically( vidName, ( outPath ) => new Promise<void>( ( resolve, reject ) => {
     const proc = spawn( "ffmpeg", [
       "-y",
       ...inputs,
@@ -499,129 +602,129 @@ export async function generateLoopVideo(
       if ( code === 0 ) resolve()
       else reject( new Error( `ffmpeg loop video exited with ${code}` ) )
     } )
-  } )
+  } ) )
 
   return { file : vidName, url : `/captures/${vidName}` }
 }
 
-// ── Countdown clip → MP4 conversion ───────────────────────────────
+// ── Countdown clip recording ──────────────────────────────────────
+
+/** Constant output cadence for a recorded countdown clip. */
+const CLIP_FPS = 25
 
 /**
- * Convert a single recorded countdown `.webm` clip into an MP4 with H.264 so
- * it downloads/plays everywhere (Safari, iOS, QuickTime won't open VP9 webm).
- * The result is cached on disk and reused on subsequent requests.
+ * End a recording whose preview has been silent for this many milliseconds.
+ *
+ * Taking the still pauses the live view (the sidecar serializes preview and
+ * capture), so frames simply stop arriving when the countdown ends. Long enough
+ * to ride out a slow frame, short enough to finish soon after the shot.
  */
-export async function convertCountdownToMp4(
-  webmFile: string,
-): Promise<{ file: string; url: string } | null> {
-  const base = path.basename( webmFile )
-  if ( !base.toLowerCase().endsWith( ".webm" ) ) return null
+const CLIP_READ_TIMEOUT_MS = 3000
 
+/**
+ * Record the countdown window straight off the camera's live MJPEG preview and
+ * encode it to MP4/H.264.
+ *
+ * The live view is a JPEG stream, so a browser-side recorder had to paint every
+ * frame onto a canvas and re-encode it with MediaRecorder — a frame-dropping
+ * second generation, and VP9/WebM on browsers that can't mux H.264. ffmpeg
+ * reads the same stream the preview shows, so the clip is a single H.264 encode
+ * of exactly the frames the camera sent.
+ *
+ * Resolution is left at the stream's native size — the EOS M6 PTP live view is
+ * 480×320 and upscaling only adds interpolated pixels.
+ *
+ * Returns null when ffmpeg is unavailable or nothing usable was recorded; the
+ * capture itself is unaffected, the result video just falls back to the image
+ * slideshow.
+ */
+export async function recordCountdownClip(
+  sessionId: string,
+  index: number,
+  streamUrl: string,
+  durationSec: number,
+): Promise<{ file: string; url: string } | null> {
   const hasFfmpeg = await ffmpegAvailable()
   if ( !hasFfmpeg ) return null
 
   await mkdir( CAPTURES_DIR, { recursive : true } )
 
-  const srcPath = path.join( CAPTURES_DIR, base )
-  // Fail fast if the source clip doesn't exist.
-  try {
-    await readFile( srcPath )
-  } catch {
-    return null
-  }
+  const clipName = `countdown-${sessionId}-${index}.mp4`
+  const outPath = path.join( CAPTURES_DIR, clipName )
+  // Encode to a temp file and rename only once it's known good — a half-written
+  // `countdown-*.mp4` would otherwise be picked up by the mashup and the sync.
+  const tmpPath = path.join(
+    CAPTURES_DIR,
+    `.rec-${sessionId}-${index}-${Date.now()}.mp4`,
+  )
 
-  const mp4Name = base.replace( /\.webm$/i, ".mp4" )
-  const outPath = path.join( CAPTURES_DIR, mp4Name )
+  const duration = Math.min( 15, Math.max( 1, durationSec ) )
+  // `-t` ends a healthy recording at exactly the countdown length. When the
+  // preview goes quiet instead, the input read timeout ends it — and ffmpeg
+  // finalizes the file on the way out. A signal can't do that job: blocked on a
+  // stalled socket, ffmpeg ignores SIGINT until the read returns, so the
+  // deadline below is only a backstop for a genuinely hung process.
+  const stopAt = duration * 1000 + CLIP_READ_TIMEOUT_MS + 2000
+  const killAt = stopAt + 3000
 
-  // Reuse a previously converted MP4 if present *and* playable. An earlier
-  // conversion may have left an empty container behind.
-  try {
-    await readFile( outPath );
-    if ( await videoFrameCount( outPath ) >= MIN_CLIP_FRAMES ) {
-      return { file : mp4Name, url : `/captures/${mp4Name}` };
-    }
-  } catch {
-    // not converted yet
-  }
-
-  // Nothing worth converting — the recording captured no frames.
-  if ( await videoFrameCount( srcPath ) < MIN_CLIP_FRAMES ) return null;
-
-  await new Promise<void>( ( resolve, reject ) => {
+  await new Promise<void>( ( resolve ) => {
     const proc = spawn( "ffmpeg", [
       "-y",
-      "-i", srcPath,
-      "-vf",
-      [
-        // libx264 requires even dimensions; round down to the nearest even px.
-        "scale=trunc(iw/2)*2:trunc(ih/2)*2",
-        "fps=24",
-        "format=yuv420p",
-      ].join( "," ),
+      // The preview is multipart/x-mixed-replace MJPEG.
+      "-f", "mpjpeg",
+      // Give up on a silent stream rather than waiting for a frame forever.
+      "-rw_timeout", String( CLIP_READ_TIMEOUT_MS * 1000 ),
+      // Stamp each frame with its arrival time. The demuxer assumes 25 fps, so
+      // a slower (or bursty) camera would otherwise play back sped up.
+      "-use_wallclock_as_timestamps", "1",
+      "-i", streamUrl,
+      "-t", String( duration ),
+      // `fps` gives a constant-rate output from the arrival timestamps;
+      // the odd-sized crop keeps any stream legal for yuv420p.
+      "-vf", `fps=${CLIP_FPS},scale=trunc(iw/2)*2:trunc(ih/2)*2`,
       "-c:v", "libx264",
-      "-preset", "fast",
-      "-crf", "23",
+      "-preset", "veryfast",
+      "-crf", "18",
       "-pix_fmt", "yuv420p",
       "-profile:v", "main",
       "-level", "4.0",
       "-tag:v", "avc1",
       "-movflags", "+faststart",
-      "-an",
-      outPath,
-    ], { stdio : "inherit" } )
-    proc.on( "close", ( code ) => {
-      if ( code === 0 ) resolve()
-      else reject( new Error( `ffmpeg countdown mp4 conversion exited with ${code}` ) )
-    } )
+      tmpPath,
+    ], { stdio : "ignore" } )
+
+    let settled = false
+    const finish = () => {
+      if ( settled ) return
+      settled = true
+      clearTimeout( sigintTimer )
+      clearTimeout( sigkillTimer )
+      resolve()
+    }
+
+    const sigintTimer = setTimeout( () => proc.kill( "SIGINT" ), stopAt )
+    const sigkillTimer = setTimeout( () => proc.kill( "SIGKILL" ), killAt )
+    proc.on( "close", finish )
+    proc.on( "error", finish )
   } )
 
-  // ffmpeg exits 0 even when it wrote an empty container, so verify the result.
-  if ( await videoFrameCount( outPath ) < MIN_CLIP_FRAMES ) return null;
+  // The exit code depends on how the recording ended (`-t` stop, read timeout,
+  // or the backstop signal), so the file is the only source of truth: fewer
+  // than two frames means ffmpeg wrote an unplayable stub.
+  const frames = await videoFrameCount( tmpPath )
+  if ( frames < MIN_CLIP_FRAMES ) {
+    await unlink( tmpPath ).catch( () => {} )
 
-  return { file : mp4Name, url : `/captures/${mp4Name}` }
-}
-
-/**
- * Normalise a browser-recorded countdown MP4 in place.
- *
- * MediaRecorder emits a *fragmented* MP4, which browsers play but iOS,
- * QuickTime and some upload targets dislike. Rewriting it as a progressive
- * file with the moov atom up front costs nothing extra because the streams are
- * copied, not re-encoded. The original is kept whenever ffmpeg is missing or
- * the remux produces something unplayable.
- */
-export async function finalizeCountdownMp4( mp4File: string ): Promise<string> {
-  const base = path.basename( mp4File );
-  if ( !base.toLowerCase().endsWith( ".mp4" ) ) return base;
-
-  const hasFfmpeg = await ffmpegAvailable();
-  if ( !hasFfmpeg ) return base;
-
-  const srcPath = path.join( CAPTURES_DIR, base );
-  const tmpPath = path.join( CAPTURES_DIR, `tmp-${base}` );
-
-  const remuxed = await new Promise<boolean>( ( resolve ) => {
-    const proc = spawn( "ffmpeg", [
-      "-y",
-      "-i", srcPath,
-      "-c", "copy",
-      "-movflags", "+faststart",
-      tmpPath,
-    ], { stdio : "ignore" } );
-    proc.on( "error", () => resolve( false ) );
-    proc.on( "close", ( code ) => resolve( code === 0 ) );
-  } );
-
-  // Fall back to the uploaded file when the remux failed or wrote no frames.
-  if ( !remuxed || ( await videoFrameCount( tmpPath ) ) < MIN_CLIP_FRAMES ) {
-    await unlink( tmpPath ).catch( () => {} );
-
-    return base;
+    return null
   }
 
-  await rename( tmpPath, srcPath );
+  await rename( tmpPath, outPath )
+  // Only one container may exist per index, or the mashup picks the wrong one.
+  await unlink(
+    path.join( CAPTURES_DIR, `countdown-${sessionId}-${index}.webm` ),
+  ).catch( () => {} )
 
-  return base;
+  return { file : clipName, url : `/captures/${clipName}` }
 }
 
 // ── Save raw (unprocessed copy) ────────────────────────────────────

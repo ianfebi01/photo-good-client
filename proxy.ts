@@ -27,5 +27,5 @@ export function proxy( request: NextRequest ) {
 
 /** Only run on page / API routes — skip static assets. */
 export const config = {
-  matcher : ['/((?!_next/static|_next/image|.*\\.(?:png|jpg|jpeg|gif|svg|ico|webp|mp4|webm)).*)'],
+  matcher : ['/((?!_next/static|_next/image|.*\\.(?:png|jpg|jpeg|gif|svg|ico|webp|mp4)).*)'],
 }

@@ -28,14 +28,18 @@ export async function POST( request: Request ) {
       try {
         const buffer = await readFile( filePath )
         
-        // Determine mime-type
+        // Determine mime-type. Only the formats this booth produces are
+        // synced: anything else (a legacy .webm clip, say) would be labelled
+        // from a guess and stored as the wrong format.
         let mimeType = 'image/jpeg'
         if ( filename.endsWith( '.mp4' ) ) {
           mimeType = 'video/mp4'
-        } else if ( filename.endsWith( '.webm' ) ) {
-          mimeType = 'video/webm'
         } else if ( filename.endsWith( '.gif' ) ) {
           mimeType = 'image/gif'
+        } else if ( !filename.endsWith( '.jpg' ) && !filename.endsWith( '.jpeg' ) ) {
+          // eslint-disable-next-line no-console
+          console.error( `Skipping unsupported media file: ${filename}` )
+          continue
         }
 
         const blob = new Blob( [buffer], { type : mimeType } )

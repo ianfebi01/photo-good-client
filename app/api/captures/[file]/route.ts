@@ -6,13 +6,12 @@ import { CAPTURES_DIR } from "@/lib/photobooth/config";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const FILE_RE = /^(shot|strip|raw-shot|anim|slideshow|countdown|countdown-mashup|loop)-[a-z0-9-]+\.(jpg|gif|mp4|webm)$/i;
+const FILE_RE = /^(shot|strip|raw-shot|anim|slideshow|countdown|countdown-mashup|loop)-[a-z0-9-]+\.(jpg|gif|mp4)$/i;
 
 const MIME: Record<string, string> = {
-  jpg  : "image/jpeg",
-  gif  : "image/gif",
-  mp4  : "video/mp4",
-  webm : "video/webm",
+  jpg : "image/jpeg",
+  gif : "image/gif",
+  mp4 : "video/mp4",
 };
 
 /** Read a byte range [start, end] (inclusive) from a file into a Uint8Array. */

@@ -19,6 +19,9 @@ FROM node:${VERSION} AS runner
 # redeclare ARG because ARG not in build environment
 ARG DIR
 WORKDIR /${DIR}
+# ffmpeg/ffprobe back every server-side media step: countdown download, the
+# GIF/loop/slideshow videos, and recording the countdown clip off the preview.
+RUN apk add --no-cache ffmpeg
 COPY --from=builder /${DIR}/.next/standalone .
 COPY --from=builder /${DIR}/public ./public
 COPY --from=builder /${DIR}/.next/static ./.next/static

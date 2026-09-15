@@ -8,7 +8,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const FILE_RE = /^shot-[a-z0-9]+-\d+\.jpg$/i;
-const COUNTDOWN_RE = /^countdown-[a-z0-9]+-\d+\.(webm|mp4)$/i;
+const COUNTDOWN_RE = /^countdown-[a-z0-9]+-\d+\.mp4$/i;
 const ID_RE = /^[a-z0-9]+$/i;
 
 /**

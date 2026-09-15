@@ -9,6 +9,7 @@ import {
   generateSessionVideo,
   generateSessionLoopVideo,
   syncSessionToServer,
+  whenCountdownClipsSettled,
 } from '@/lib/photobooth/frames.query'
 
 import { SyncStatusBanner, type SyncStatus } from '@/components/booth/SyncStatusBanner'
@@ -66,13 +67,21 @@ export function StepResult() {
     if ( !strip || photos.length === 0 ) return
 
     const files = photos.map( ( p ) => p.file )
-    const cdFiles = countdownClips.map( ( c ) => c.file )
 
     // Countdown mashup (or image slideshow fallback)
     if ( !startedRef.current.video && !videoUrl ) {
       startedRef.current.video = true
       setVideoStatus( 'loading' )
-      generateSessionVideo( { sessionId, files, countdownFiles : cdFiles, frameKey } )
+      // A clip may still be recording (ffmpeg finishes once the preview goes
+      // quiet after the shot), so wait for it and then read the clip list fresh
+      // from the store instead of this render's snapshot.
+      whenCountdownClipsSettled()
+        .then( () => generateSessionVideo( {
+          sessionId,
+          files,
+          countdownFiles : useBoothStore.getState().countdownClips.map( ( c ) => c.file ),
+          frameKey,
+        } ) )
         .then( ( r ) => {
           if ( r ) {
             setVideoUrl( r.url )
@@ -103,7 +112,6 @@ export function StepResult() {
     strip,
     photos,
     sessionId,
-    countdownClips,
     videoUrl,
     loopVideoUrl,
     frameKey,

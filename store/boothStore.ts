@@ -108,7 +108,7 @@ export interface BoothState {
   timerEnabled: boolean;
   /** Seconds remaining on the current step timer. */
   timerSecondsLeft: number | null;
-  /** Kiosk config: skip the 3-2-1 shutter countdown and capture instantly. */
+  /** Kiosk config: skip the shutter countdown and capture instantly. */
   disableCountdown: boolean;
 
   // ── Per-booth settings (transient) ─────────────────
@@ -151,6 +151,12 @@ export interface BoothState {
   setVideoUrl: ( url: string | null ) => void;
   setLoopVideoUrl: ( url: string | null ) => void;
   addCountdownClip: ( clip: Shot ) => void;
+  /**
+   * The current session id, creating and storing one when the session hasn't
+   * started yet. `takeShot()` normally creates it, but the countdown recording
+   * for the first shot begins before that shot is taken.
+   */
+  ensureSessionId: () => string;
   setTimerEnabled: ( enabled: boolean ) => void;
   setTimerSecondsLeft: ( seconds: number | null ) => void;
   setDisableCountdown: ( disabled: boolean ) => void;
@@ -396,6 +402,20 @@ export const useBoothStore = create<BoothState>()(
       set( ( s ) => ( {
         countdownClips : [...s.countdownClips, clip],
       } ) );
+    },
+
+    // ── Session id ─────────────────────────────────
+    // An empty id is rejected by the capture routes, which silently lost the
+    // first countdown clip of every session: its recording starts on the shutter
+    // tap, before the first `takeShot()` has created the session.
+    ensureSessionId : () => {
+      const { sessionId } = get();
+      if ( sessionId ) return sessionId;
+
+      const active = newId();
+      set( { sessionId : active } );
+
+      return active;
     },
 
     // ── Timer controls ─────────────────────────────

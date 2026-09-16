@@ -270,6 +270,14 @@ export const useBoothStore = create<BoothState>()(
     // ── Session reset ──────────────────────────────
     reset : () => {
       _capturing = false;
+      const previousSessionId = get().sessionId;
+      if ( previousSessionId ) {
+        void fetch( "/api/captures/session", {
+          method  : "DELETE",
+          headers : { "Content-Type" : "application/json" },
+          body    : JSON.stringify( { sessionId : previousSessionId } ),
+        } ).catch( () => {} );
+      }
       const { frames } = get();
       set( {
         ...freshSessionState(),

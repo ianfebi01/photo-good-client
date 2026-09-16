@@ -31,16 +31,6 @@ export type BoothFramesResponse = {
 }
 
 export async function fetchBoothFrames(): Promise<ClientFrame[]> {
-  // 1. Try locally-synced frames first (instant, no network)
-  try {
-    const { loadLocalFrames } = await import( './frames.sync' )
-    const local = await loadLocalFrames()
-    if ( local && local.length > 0 ) return local
-  } catch {
-    // Sync module not available — fall through to network
-  }
-
-  // 2. Fall back to external API
   try {
     const res = await externalFetch( '/api/booth/frames', {
       cache : 'no-store',

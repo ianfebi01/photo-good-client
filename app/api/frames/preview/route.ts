@@ -1,9 +1,36 @@
 import sharp from 'sharp'
-import fs from 'node:fs/promises'
 import { getFrame, EXTERNAL_BASE_URL, externalFetch } from '@/lib/photobooth/config'
 import { detectGreenSlots, clearGreenPixels } from '@/lib/photobooth/slots'
 
 export const runtime = 'nodejs'
+
+const frameImageCache = new Map<string, Buffer>()
+
+async function fetchFrameImage( imageUrl: string, sameOrigin: boolean ): Promise<Buffer> {
+  const cached = frameImageCache.get( imageUrl )
+  const fetcher = sameOrigin ? externalFetch : fetch
+  let lastError: unknown
+
+  for ( let attempt = 0; attempt < 2; attempt++ ) {
+    try {
+      const res = await fetcher( imageUrl, { cache : 'force-cache' } )
+      if ( !res.ok ) {
+        throw new Error( `Frame image request failed: ${res.status} ${res.statusText}` )
+      }
+
+      const buffer = Buffer.from( await res.arrayBuffer() )
+      frameImageCache.set( imageUrl, buffer )
+
+      return buffer
+    } catch ( error ) {
+      lastError = error
+    }
+  }
+
+  if ( cached ) return cached
+
+  throw lastError instanceof Error ? lastError : new Error( 'Frame image request failed' )
+}
 
 /**
  * The frame image with its green slot panels turned transparent, so photos
@@ -99,50 +126,29 @@ export async function GET( request: Request ) {
     return Response.json( { error : 'Missing key parameter' }, { status : 400 } )
   }
 
-  // Resolve frame — getFrame() now checks both filesystem and DB
-  const frame = await getFrame( key )
-
-  if ( !frame ) {
-    return Response.json( { error : 'Frame not found' }, { status : 404 } )
-  }
-
   try {
-    let buffer: Buffer
+    // Resolve frame metadata from the external server inside the error boundary.
+    const frame = await getFrame( key )
 
-    if ( frame.image ) {
-      // Local filesystem frame (built-in or legacy user-manifest)
-      buffer = await fs.readFile( frame.image )
-    } else {
-      // Fetch from the external URL.
-      if ( !frame.publicUrl ) {
-        throw new Error( `Frame "${key}" has no publicUrl — the external API may not have returned an imageUrl` )
-      }
-
-      // Resolve relative URLs against the external base URL.
-      const imageUrl = frame.publicUrl.startsWith( 'http' )
-        ? frame.publicUrl
-        : `${EXTERNAL_BASE_URL.replace( /\/$/, '' )}/${frame.publicUrl.replace( /^\//, '' )}`;
-
-      // Use externalFetch (with Authorization header) only when the image is
-      // on the same origin as the booth API.  Cross-origin URLs (CDN, cloud
-      // storage) use plain fetch so the bearer token isn't leaked to a third
-      // party that may reject it.
-      const isSameOrigin = imageUrl.startsWith(
-        EXTERNAL_BASE_URL.replace( /\/$/, '' ),
-      );
-
-      // eslint-disable-next-line no-console
-      console.log( `Fetching frame image for "${key}" from ${imageUrl} (sameOrigin=${isSameOrigin})` )
-
-      const fetcher = isSameOrigin ? externalFetch : fetch
-      const res = await fetcher( imageUrl );
-      if ( !res.ok ) {
-        throw new Error(
-          `Failed to fetch frame image for "${key}" from ${imageUrl}: ${res.status} ${res.statusText}`,
-        )
-      }
-      buffer = Buffer.from( await res.arrayBuffer() );
+    if ( !frame ) {
+      return Response.json( { error : 'Frame not found' }, { status : 404 } )
     }
+
+    if ( !frame.publicUrl ) {
+      throw new Error( `Frame "${key}" has no publicUrl — the external API may not have returned an imageUrl` )
+    }
+
+    // Resolve relative URLs against the external base URL.
+    const imageUrl = frame.publicUrl.startsWith( 'http' )
+      ? frame.publicUrl
+      : `${EXTERNAL_BASE_URL.replace( /\/$/, '' )}/${frame.publicUrl.replace( /^\//, '' )}`;
+
+    // Use externalFetch (with Authorization header) only when the image is
+    // on the same origin as the booth API. Cross-origin URLs use plain fetch.
+    const isSameOrigin = imageUrl.startsWith(
+      EXTERNAL_BASE_URL.replace( /\/$/, '' ),
+    );
+    const buffer = await fetchFrameImage( imageUrl, isSameOrigin )
 
     if ( raw ) {
       const contentType = key.endsWith( '.png' ) ? 'image/png' : 'image/jpeg'
@@ -150,7 +156,7 @@ export async function GET( request: Request ) {
       return new Response( new Uint8Array( buffer ), {
         headers : {
           'Content-Type'  : contentType,
-          'Cache-Control' : 'no-store, no-cache, must-revalidate, proxy-revalidate',
+          'Cache-Control' : 'public, max-age=3600, stale-while-revalidate=86400',
         },
       } )
     }
@@ -164,7 +170,7 @@ export async function GET( request: Request ) {
       return new Response( new Uint8Array( body ), {
         headers : {
           'Content-Type'  : transparent ? 'image/png' : ( key.endsWith( '.png' ) ? 'image/png' : 'image/jpeg' ),
-          'Cache-Control' : 'no-store, no-cache, must-revalidate, proxy-revalidate',
+          'Cache-Control' : 'public, max-age=3600, stale-while-revalidate=86400',
         },
       } )
     }
@@ -177,7 +183,7 @@ export async function GET( request: Request ) {
       return new Response( new Uint8Array( buffer ), {
         headers : {
           'Content-Type'  : contentType,
-          'Cache-Control' : 'no-store, no-cache, must-revalidate, proxy-revalidate',
+          'Cache-Control' : 'public, max-age=3600, stale-while-revalidate=86400',
         },
       } )
     }
@@ -185,15 +191,16 @@ export async function GET( request: Request ) {
     return new Response( new Uint8Array( composed ), {
       headers : {
         'Content-Type'  : 'image/png',
-        'Cache-Control' : 'no-store, no-cache, must-revalidate, proxy-revalidate',
+        'Cache-Control' : 'public, max-age=3600, stale-while-revalidate=86400',
       },
     } )
   } catch ( e ) {
+    // eslint-disable-next-line no-console
     console.log( e )
     
     return Response.json(
       { error : e instanceof Error ? e.message : 'Failed to generate preview' },
-      { status : 500 },
+      { status : 503, headers : { 'Retry-After' : '1' } },
     )
   }
 }

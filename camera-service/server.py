@@ -1074,7 +1074,7 @@ manager = CameraManager()
 # domain so browsers on any device can reach the local camera service.
 ALLOWED_ORIGINS = os.environ.get(
     "CAMERA_CORS_ORIGINS",
-    "https://photo-good.ianfebisastrataruna.my.id,http://localhost:3000",
+    "https://photo-good.ianfebisastrataruna.my.id,http://localhost:3000,http://localhost:3001,http://127.0.0.1:3000,http://127.0.0.1:3001",
 )
 
 

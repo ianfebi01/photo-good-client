@@ -49,12 +49,6 @@ export async function externalFetch( pathOrUrl: string, init?: RequestInit ): Pr
 /** Absolute directory where captures and composed strips are written. */
 export const CAPTURES_DIR = path.join( process.cwd(), "public", "captures" );
 
-/** Absolute directory where synced frame images are cached locally. */
-export const FRAMES_DIR = path.join( process.cwd(), "public", "frames" );
-
-/** Absolute path to the local frame manifest. */
-export const FRAMES_MANIFEST_PATH = path.join( FRAMES_DIR, "manifest.json" );
-
 /**
  * Set PHOTOBOOTH_MOCK=1 to force the simulated camera even when a real one is
  * attached. Useful for development and demos.
@@ -112,35 +106,8 @@ export type FrameDef = {
 };
 
 export async function getFrame( key: string ): Promise<FrameDef | null> {
-  // 1. Try local synced frame first (instant, no network)
   try {
-    const { getLocalFramePath, loadLocalFrames } = await import( './frames.sync' )
-    const localPath = await getLocalFramePath( key )
-
-    if ( localPath ) {
-      const frames = await loadLocalFrames()
-      const local = frames?.find( ( f ) => f.key === key )
-
-      if ( local ) {
-        return {
-          key       : local.key,
-          label     : local.label,
-          image     : localPath,
-          publicUrl : local.publicUrl,
-          width     : local.width,
-          height    : local.height,
-          slots     : local.slots,
-          builtIn   : local.builtIn,
-        }
-      }
-    }
-  } catch {
-    // Sync module not available or no local cache — fall through
-  }
-
-  // 2. Fall back to external API
-  try {
-    const res = await externalFetch( "/api/booth/frames" )
+    const res = await externalFetch( "/api/booth/frames", { cache : 'force-cache' } )
     if ( !res.ok ) return null
     const data = await res.json() as {
       frames: Array<{

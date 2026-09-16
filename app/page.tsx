@@ -6,12 +6,10 @@ import PhotoboothCard from '@/components/PhotoboothCard'
 import QuoteCard from '@/components/QuoteCard'
 import AppCard from '@/components/AppCard'
 import Link from 'next/link'
-import { FrameSyncTrigger } from '@/components/FrameSyncTrigger'
 
 export default function Home() {
   return (
     <>
-      <FrameSyncTrigger />
       <main className="min-h-screen lg:min-h-[unset] lg:h-screen bg-white">
         <div className="container px-4 py-8 mx-auto lg:py-16 lg:h-full">
           <div

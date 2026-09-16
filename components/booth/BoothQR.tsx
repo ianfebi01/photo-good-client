@@ -77,7 +77,7 @@ export function BoothQR( { page }: { page?: string } ) {
           <div className="absolute inset-0 animate-pulse rounded-xl border bg-secondary shadow-sm" />
         )}
       </div>
-      <span className="text-xs text-muted-foreground truncate max-w-45 h-8">
+      <span className="text-xs text-muted-foreground h-8">
         {url}
       </span>
     </div>

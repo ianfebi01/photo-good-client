@@ -85,8 +85,49 @@ export type CameraModeState = {
 }
 
 // ── Media upload ──────────────────────────────────────────────────
+//
+// Uploads are presigned: ask for a PUT URL, send the bytes straight to object
+// storage, then finalise the row. The file never passes through either app
+// server, so multipart POSTs to /api/booth/media are gone.
 
-/** POST /api/booth/media response. */
+/** POST /api/booth/media/presign request (JSON body). */
+export type BoothMediaPresignRequest = {
+  /** MIME type sent as `Content-Type` on the PUT. */
+  mimeType : string
+  /** Optional byte count — rejected up front when over the cap. */
+  size? : number
+  /** Optional original name, used only to guess an extension. */
+  filename? : string
+}
+
+/** POST /api/booth/media/presign response. */
+export type BoothMediaPresignResponse = {
+  /** Short-lived signed URL to PUT the file to. */
+  uploadUrl : string
+  /** Object key to pass to POST /api/booth/media afterwards. */
+  key : string
+  /** Generated stored filename (the key's basename). */
+  filename : string
+  /** Domain-less stored path (`/key`). */
+  mediaPath : string
+  /** Absolute public URL, usable as soon as the PUT succeeds. */
+  publicUrl : string
+  /** Must be sent verbatim as the PUT `Content-Type`. */
+  contentType : string
+  expiresIn : number
+}
+
+/** POST /api/booth/media request (JSON body) — run after the presigned PUT. */
+export type BoothMediaFinalizeRequest = {
+  key : string
+}
+
+/**
+ * POST /api/booth/media response, wrapped as `{ media }`.
+ *
+ * The size and MIME type are read back from storage, so this always describes
+ * what actually landed rather than what was declared.
+ */
 export type BoothMedia = {
   id : string
   filename : string

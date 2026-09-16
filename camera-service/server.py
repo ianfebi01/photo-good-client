@@ -104,7 +104,7 @@ IS_DARWIN = platform.system() == "Darwin"
 
 # ── Camera sources ───────────────────────────────────────────────────
 #
-# `gphoto` is the default and the only mode with a real still capture. `uvc`
+# `uvc` is the default. `gphoto` is the only mode with a real still capture. `uvc`
 # reads a video capture device as live video, so its "shot" is a screenshot —
 # which is what /snapshot already is, making the switch a change of reader
 # rather than a change of pipeline.
@@ -563,7 +563,7 @@ class CameraManager:
         # _mode_cv and picks the new source up.
         stored_mode, stored_device, stored_label = load_state()
         env_mode = os.environ.get("CAMERA_MODE", "").strip().lower()
-        self._mode = env_mode if env_mode in MODES else ( stored_mode or MODE_GPHOTO )
+        self._mode = env_mode if env_mode in MODES else ( stored_mode or MODE_UVC )
         # Explicit request only (env or a switch). A device remembered from a
         # previous run is kept to one side and re-resolved by name, because the
         # id it was stored as may point somewhere else by now.

@@ -41,7 +41,7 @@ async function readState(): Promise<CameraModeState | null> {
   if ( !mode ) return null;
 
   return {
-    mode    : isMode( mode.mode ) ? mode.mode : "gphoto",
+    mode    : isMode( mode.mode ) ? mode.mode : "uvc",
     device  : mode.device ?? null,
     modes   : mode.modes?.length ? mode.modes : MODES,
     ffmpeg  : mode.ffmpeg ?? deviceList?.ffmpeg ?? false,

@@ -58,7 +58,7 @@ export function CameraModeToggle( { disabled = false }: { disabled?: boolean } )
   const [ devices, setDevices ] = useState<CameraDevice[]>( [] )
   const [ device, setDevice ] = useState<string | null>( null )
 
-  const active = requested ?? status?.mode ?? 'gphoto'
+  const active = requested ?? status?.mode ?? 'uvc'
   const busy = requested !== null
 
   // Read the device list once so `uvc` can offer a picker. A booth with no

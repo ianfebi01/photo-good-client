@@ -3,12 +3,12 @@
 A small Python sidecar that owns the camera and exposes it to the Next.js app
 over HTTP. It reads **either** of two sources:
 
-- **`gphoto`** (default) — a PTP camera via [python-gphoto2](https://github.com/jim-easterbrook/python-gphoto2),
+- **`gphoto`** — a PTP camera via [python-gphoto2](https://github.com/jim-easterbrook/python-gphoto2),
   a real libgphoto2 binding. It replaces shelling out to the `gphoto2` CLI.
   Because it holds one camera object in-process, it can call `camera.exit()` /
   `init()` to **rebind to a reconnected camera without restarting anything** —
   so unplug/replug recovers on its own.
-- **`uvc`** — a USB/HDMI video capture device, read as live video by `ffmpeg`
+- **`uvc`** (default) — a USB/HDMI video capture device, read as live video by `ffmpeg`
   (`avfoundation` on macOS, `v4l2` on Linux). Needs `ffmpeg` on the camera host.
 
 The booth has a **camera source toggle** on the capture step that switches
@@ -87,7 +87,7 @@ Environment variables (read by both the service and the Next.js app):
 
 UVC mode:
 
-- `CAMERA_MODE` — `gphoto` (default) or `uvc`; a *starting point* only. The
+- `CAMERA_MODE` — `uvc` (default) or `gphoto`; a *starting point* only. The
   toggle's choice wins and is remembered in `.camera-state.json`.
 - `CAMERA_UVC_DEVICE` — the capture device to read: an AVFoundation index
   (`0`) or name on macOS, a `/dev/video*` path on Linux. Unset, the service

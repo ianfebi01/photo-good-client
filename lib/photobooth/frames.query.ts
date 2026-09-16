@@ -136,7 +136,7 @@ export async function getCameraStatus(): Promise<Status> {
         mock      : !data.connected,
         model     : data.model ?? undefined,
         gphoto2   : true,        // Carry the source through: the booth's mode toggle reads it from here.
-        mode      : data.mode === 'uvc' ? 'uvc' : 'gphoto',
+        mode      : data.mode === 'gphoto' ? 'gphoto' : 'uvc',
         device    : data.device ?? null,      };
     } catch {
       // Sidecar became unreachable — fall through to server fallback
@@ -162,7 +162,7 @@ function normalizeModeState(
     : []
 
   return {
-    mode   : modeData.mode === 'uvc' ? 'uvc' : 'gphoto',
+    mode   : modeData.mode === 'gphoto' ? 'gphoto' : 'uvc',
     device : modeData.device ?? null,
     modes  : modes.length ? modes : [ 'gphoto', 'uvc' ],
     ffmpeg : Boolean( modeData.ffmpeg ),

@@ -6,7 +6,7 @@ import {
   FALLBACK_FRAMES,
 } from "@/lib/photobooth/frames.client";
 import { captureShot, composeStrip } from "@/lib/photobooth/frames.query";
-import type { BoothClientSettings } from "@/types/booth";
+import type { BoothClientSettings, CameraMode } from "@/types/booth";
 
 export type Shot = { file: string; url: string };
 export type Phase =
@@ -22,6 +22,14 @@ export type Status = {
   mock: boolean;
   model?: string;
   gphoto2: boolean;
+  /**
+   * Which source produced this status: the PTP camera (via the camera service)
+   * or a USB video capture device. Absent on responses from an older camera
+   * service, which only ever had the PTP one.
+   */
+  mode?: CameraMode;
+  /** Capture device `uvc` mode is reading, when one is known. */
+  device?: string | null;
 };
 
 /** Idle timeout per step (seconds). Based on photobooth industry standards. */
@@ -262,6 +270,14 @@ export const useBoothStore = create<BoothState>()(
     // ── Session reset ──────────────────────────────
     reset : () => {
       _capturing = false;
+      const previousSessionId = get().sessionId;
+      if ( previousSessionId ) {
+        void fetch( "/api/captures/session", {
+          method  : "DELETE",
+          headers : { "Content-Type" : "application/json" },
+          body    : JSON.stringify( { sessionId : previousSessionId } ),
+        } ).catch( () => {} );
+      }
       const { frames } = get();
       set( {
         ...freshSessionState(),

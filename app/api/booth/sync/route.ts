@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { CAPTURES_DIR, externalFetch } from '@/lib/photobooth/config'
+import { uploadMediaToBackend } from '@/lib/photobooth/media.upload'
 import type { BoothResultCreateRequest, BoothResultCreateResponse, BoothResultItem, BoothMediaType } from '@/types/booth'
 
 export const runtime = 'nodejs'
@@ -42,39 +43,14 @@ export async function POST( request: Request ) {
           continue
         }
 
-        const blob = new Blob( [buffer], { type : mimeType } )
-        const formData = new FormData()
-        formData.append( 'file', blob, filename )
-
-        const mediaRes = await externalFetch( '/api/booth/media', {
-          method : 'POST',
-          body   : formData,
-        } )
-
-        if ( !mediaRes.ok ) {
-          const errMsg = await mediaRes.text()
-          // eslint-disable-next-line no-console
-          console.error( `Failed to upload media ${filename} to external API:`, errMsg )
-          continue
-        }
-
-        const mediaData = await mediaRes.json() as any
-        // eslint-disable-next-line no-console
-        console.log( `Upload response for ${filename}:`, mediaData )
-
-        const mediaId = mediaData.id || mediaData.mediaId || mediaData.media_id || mediaData.media?.id || mediaData.media?.media_id
-
-        if ( !mediaId ) {
-          // eslint-disable-next-line no-console
-          console.error( `Could not find media ID in response for ${filename}:`, mediaData )
-          continue
-        }
+        // Presign → upload straight to storage → finalise. The bytes never pass
+        // through this app or the booth API.
+        const media = await uploadMediaToBackend( { buffer, filename, mimeType } )
 
         syncedItems.push( {
-          mediaId  : mediaId,
-          media_id : mediaId, // Send both cases just in case
-          type     : item.type,
-        } as any )
+          mediaId : media.id,
+          type    : item.type,
+        } )
       } catch ( err ) {
         // eslint-disable-next-line no-console
         console.error( `Error uploading file ${filename}:`, err )

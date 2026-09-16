@@ -53,6 +53,37 @@ export type BoothSettingsResponse = {
   settings : BoothClientSettings
 }
 
+// ── Camera source ────────────────────────────────────────────────
+
+/**
+ * Where the booth gets its pictures from.
+ *
+ * - `gphoto` — a PTP camera owned by the camera service (libgphoto2). Its live
+ *   view is a movie preview, so a shot is a screenshot of the newest frame.
+ * - `uvc` — a USB/HDMI video capture device, read as live video by ffmpeg. A
+ *   capture device has no still path at all, so a shot there is *only ever* a
+ *   screenshot of the video.
+ */
+export type CameraMode = 'gphoto' | 'uvc'
+
+/** A capture device `uvc` mode can read. */
+export type CameraDevice = {
+  /** How the camera host addresses it — an AVFoundation index or a /dev path. */
+  id : string
+  label : string
+}
+
+/** GET /api/camera/mode (and POST /api/camera/mode) response. */
+export type CameraModeState = {
+  mode : CameraMode
+  /** Device `uvc` mode is reading, when one is known. */
+  device : string | null
+  modes : CameraMode[]
+  /** False when the camera host has no ffmpeg — UVC mode cannot run there. */
+  ffmpeg : boolean
+  devices : CameraDevice[]
+}
+
 // ── Media upload ──────────────────────────────────────────────────
 
 /** POST /api/booth/media response. */

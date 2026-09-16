@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/button'
 import { useBoothStore } from '@/store/boothStore'
 
 import { CameraPreview } from './CameraPreview'
+import { CameraModeToggle } from './CameraModeToggle'
 import { FramePreview } from './FramePreview'
 import { ShutterControls } from './ShutterControls'
 import { StepHeader } from './StepHeader'
@@ -355,14 +356,19 @@ export function StepCapture() {
         title="Capture Photos"
         subtitle={`${photos.length}/${photoCount} shots taken`}
         actions={
-          adjusting && (
-            <Button
-              size="lg"
-              onClick={handleGoToFilter}
-            >
-              Next <ChevronRight />
-            </Button>
-          )
+          <div className="flex items-center gap-2">
+            {/* Switching source mid-shot would swap the camera under a live
+                stream, so it waits for the capture to settle. */}
+            <CameraModeToggle disabled={busy || countdown !== null} />
+            {adjusting && (
+              <Button
+                size="lg"
+                onClick={handleGoToFilter}
+              >
+                Next <ChevronRight />
+              </Button>
+            )}
+          </div>
         }
       />
 

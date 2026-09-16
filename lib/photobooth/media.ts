@@ -672,6 +672,8 @@ async function resolveFrameImagePath( frameKey: string ): Promise<string> {
 // ── Image loop MP4 ────────────────────────────────────────────────
 
 const LOOP_W = 720;
+/** Canvas height used only when the photos' own shape cannot be probed. */
+const LOOP_FALLBACK_H = 480;
 const SECS_PER_PHOTO = 0.7;
 
 /**
@@ -712,10 +714,23 @@ async function buildLoopVideo(
 
   // Build concat filter: [0:v][1:v][2:v]...concat=n=N:v=1:a=0
   const streamTags = files.map( ( _, i ) => `[${i}:v]` ).join( "" )
+
+  // Size the canvas to the photos' own shape, so a session needs no padding at
+  // all. `pad` defaults to black, which reads as a border around every photo —
+  // the strip's paper is white, so white is the fallback for a session whose
+  // photos differ in size. Round *up*: a canvas smaller than the scaled frame
+  // makes ffmpeg reject the whole filter graph.
+  const first = await videoSize(
+    path.resolve( CAPTURES_DIR, path.basename( files[0] ) ),
+  )
+  const canvasH = first.width > 0
+    ? evenUp( Math.round( ( LOOP_W * first.height ) / first.width ) )
+    : LOOP_FALLBACK_H
+
   const filterComplex = [
     `${streamTags}concat=n=${files.length}:v=1:a=0`,
     `scale=${LOOP_W}:-2:force_original_aspect_ratio=decrease`,
-    `pad=${LOOP_W}:480:(ow-iw)/2:(oh-ih)/2`,
+    `pad=${LOOP_W}:${canvasH}:(ow-iw)/2:(oh-ih)/2:color=white`,
     "fps=24",
     "format=yuv420p",
   ].join( "," )

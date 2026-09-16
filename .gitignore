@@ -33,6 +33,8 @@
 
 # camera-service python virtualenv
 /camera-service/.venv
+# remembered camera source (written by the mode toggle)
+/camera-service/.camera-state.json
 
 # debug
 npm-debug.log*

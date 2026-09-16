@@ -15,4 +15,9 @@ fi
 ./.venv/bin/pip install --quiet --upgrade pip
 ./.venv/bin/pip install -r requirements.txt
 
+if ! command -v ffmpeg >/dev/null 2>&1; then
+  echo "[camera-service] note: ffmpeg not found — UVC mode (USB/HDMI capture"
+  echo "[camera-service]       device) needs it. Install with: brew install ffmpeg"
+fi
+
 echo "[camera-service] ready. Start it with: pnpm camera"

@@ -11,6 +11,7 @@ import {
   PHOTO_WIDTH,
 } from "./config";
 import { sidecarSnapshot, sidecarStatus } from "./sidecar";
+import type { CameraMode } from "@/types/booth";
 
 export type CameraStatus = {
   /** A real camera is reachable and will be used. */
@@ -21,6 +22,10 @@ export type CameraStatus = {
   model?: string;
   /** True when the camera service (sidecar) is reachable. */
   gphoto2: boolean;
+  /** Which source the camera service is reading: `gphoto` (PTP) or `uvc`. */
+  mode?: CameraMode;
+  /** Capture device `uvc` mode is reading. */
+  device?: string | null;
 };
 
 export async function ensureCapturesDir() {
@@ -29,9 +34,10 @@ export async function ensureCapturesDir() {
 
 /**
  * Camera status comes from the Python sidecar (camera-service/), which owns the
- * camera via libgphoto2 and recovers across USB reconnects in-process. When the
- * sidecar is unreachable — or PHOTOBOOTH_MOCK=1 — we fall back to the simulated
- * camera so the app keeps working without hardware.
+ * camera — a PTP body via libgphoto2, or a USB video capture device via ffmpeg
+ * — and recovers across USB reconnects in-process. When the sidecar is
+ * unreachable — or PHOTOBOOTH_MOCK=1 — we fall back to the simulated camera so
+ * the app keeps working without hardware.
  */
 export async function detectCamera(): Promise<CameraStatus> {
   if ( FORCE_MOCK ) return { connected : false, mock : true, gphoto2 : false };
@@ -44,18 +50,21 @@ export async function detectCamera(): Promise<CameraStatus> {
     mock      : !status.connected,
     model     : status.model ?? undefined,
     gphoto2   : true,
+    mode      : status.mode,
+    device    : status.device ?? null,
   };
 }
 
 /**
- * Capture one shot as a JPEG buffer.
+ * A shot is always a screenshot of the live view — in *both* modes.
  *
- * A shot is a screenshot of the movie preview: the sidecar returns the newest
- * live-view frame rather than driving a PTP still, so the preview the guest is
- * posing into never freezes and nothing waits on a sensor readout. The trade-off
- * is resolution — the shot is whatever the live view delivers (480×320 on an EOS
- * M6), not the body's full sensor resolution. Upscaling it adds no detail, so
- * the strip is composed from the frame as-is.
+ * With a PTP body the sidecar returns the newest movie-preview frame instead of
+ * driving a still, so the preview the guest is posing into never freezes and
+ * nothing waits on a sensor readout. A UVC capture device has no still path at
+ * all, so there a screenshot is the only capture there is. The trade-off is
+ * resolution — the shot is whatever the source delivers (480×320 on an EOS M6's
+ * PTP live view, up to 1080p from an HDMI→USB capture device). Upscaling it adds
+ * no detail, so the strip is composed from the frame as-is.
  *
  * With no camera attached we synthesize a mock frame instead.
  */

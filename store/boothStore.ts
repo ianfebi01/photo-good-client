@@ -6,7 +6,7 @@ import {
   FALLBACK_FRAMES,
 } from "@/lib/photobooth/frames.client";
 import { captureShot, composeStrip } from "@/lib/photobooth/frames.query";
-import type { BoothClientSettings } from "@/types/booth";
+import type { BoothClientSettings, CameraMode } from "@/types/booth";
 
 export type Shot = { file: string; url: string };
 export type Phase =
@@ -22,6 +22,14 @@ export type Status = {
   mock: boolean;
   model?: string;
   gphoto2: boolean;
+  /**
+   * Which source produced this status: the PTP camera (via the camera service)
+   * or a USB video capture device. Absent on responses from an older camera
+   * service, which only ever had the PTP one.
+   */
+  mode?: CameraMode;
+  /** Capture device `uvc` mode is reading, when one is known. */
+  device?: string | null;
 };
 
 /** Idle timeout per step (seconds). Based on photobooth industry standards. */

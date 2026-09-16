@@ -1,4 +1,5 @@
 import type { ClientFrame } from './frames.client'
+import type { CameraDevice, CameraMode, CameraModeState } from '@/types/booth'
 import type { Status } from '@/store/boothStore'
 
 export const FRAMES_QUERY_KEY = ['frames'] as const
@@ -134,8 +135,9 @@ export async function getCameraStatus(): Promise<Status> {
         connected : data.connected,
         mock      : !data.connected,
         model     : data.model ?? undefined,
-        gphoto2   : true,
-      };
+        gphoto2   : true,        // Carry the source through: the booth's mode toggle reads it from here.
+        mode      : data.mode === 'uvc' ? 'uvc' : 'gphoto',
+        device    : data.device ?? null,      };
     } catch {
       // Sidecar became unreachable — fall through to server fallback
       _cameraBase = null;
@@ -146,6 +148,99 @@ export async function getCameraStatus(): Promise<Status> {
   const response = await fetch( "/api/camera/status", { cache : "no-store" } );
   
   return parseJson<Status>( response, "Failed to load camera status" );
+}
+
+// ── Camera source (gphoto PTP vs. USB video capture) ─────────────────
+
+/** Coerce whatever the camera service returned into a complete mode state. */
+function normalizeModeState(
+  modeData: Partial<CameraModeState> & { mode?: string },
+  devices: CameraDevice[] = [],
+): CameraModeState {
+  const modes = Array.isArray( modeData.modes )
+    ? modeData.modes.filter( ( m ): m is CameraMode => m === 'gphoto' || m === 'uvc' )
+    : []
+
+  return {
+    mode   : modeData.mode === 'uvc' ? 'uvc' : 'gphoto',
+    device : modeData.device ?? null,
+    modes  : modes.length ? modes : [ 'gphoto', 'uvc' ],
+    ffmpeg : Boolean( modeData.ffmpeg ),
+    devices,
+  }
+}
+
+/**
+ * The camera source in use, plus the capture devices this camera host can read.
+ *
+ * Reads the local service directly when the browser can reach it (same
+ * preference order as captures), otherwise the app's `/api/camera/mode` proxy.
+ */
+export async function getCameraModeState(): Promise<CameraModeState> {
+  const base = await ensureCameraDiscovered()
+
+  if ( base ) {
+    try {
+      const [ modeRes, devicesRes ] = await Promise.all( [
+        fetch( `${base}/mode`, { cache : 'no-store' } ),
+        fetch( `${base}/devices`, { cache : 'no-store' } ),
+      ] )
+      const modeData = await parseJson<Partial<CameraModeState>>(
+        modeRes,
+        'Failed to read camera mode',
+      )
+      const deviceData = devicesRes.ok
+        ? await devicesRes.json().catch( () => null )
+        : null
+
+      return normalizeModeState( modeData, deviceData?.devices ?? [] )
+    } catch {
+      // Sidecar became unreachable — fall through to the server proxy
+      _cameraBase = null
+    }
+  }
+
+  const response = await fetch( '/api/camera/mode', { cache : 'no-store' } )
+
+  return normalizeModeState( await parseJson<CameraModeState>( response, 'Failed to read camera mode' ) )
+}
+
+/**
+ * Switch the camera source (`gphoto` ⇄ `uvc`).
+ *
+ * Callers must restart the preview afterwards: the running MJPEG stream was
+ * opened against the old source and will not switch by itself.
+ */
+export async function setCameraMode(
+  mode: CameraMode,
+  device?: string,
+): Promise<CameraModeState> {
+  const body = JSON.stringify( { mode, ...( device ? { device } : {} ) } )
+  const init: RequestInit = {
+    method  : 'POST',
+    headers : { 'Content-Type' : 'application/json' },
+    body,
+  }
+  const base = await ensureCameraDiscovered()
+
+  if ( base ) {
+    try {
+      const res = await fetch( `${base}/mode`, init )
+      await parseJson<{ mode : CameraMode }>( res, 'Camera mode switch failed' )
+
+      // Re-read so the device list and resolved device match the new source.
+      return getCameraModeState()
+    } catch ( err ) {
+      if ( err instanceof TypeError ) _cameraBase = null // service gone
+      else throw err
+    }
+  }
+
+  const response = await fetch( '/api/camera/mode', init )
+
+  return normalizeModeState(
+    await parseJson<CameraModeState>( response, 'Camera mode switch failed' ),
+  )
 }
 
 export async function captureShot( {

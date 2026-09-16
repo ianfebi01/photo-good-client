@@ -64,11 +64,19 @@ pnpm camera:setup   # one-time: create venv + install python-gphoto2
 pnpm camera         # start the service (default http://127.0.0.1:8088)
 ```
 
-Run it alongside `pnpm dev` in a second terminal.
+Run it alongside `pnpm dev` in a second terminal. Starting it twice is harmless:
+if the port is taken the new process says so and exits **without** touching the
+camera (the device is exclusive, so a second reader would fight the first).
 
 ## Configuration
 
 Environment variables (read by both the service and the Next.js app):
+
+> The service reads `CAMERA_*` keys from the repo's `.env` and `.env.local`
+> itself (`.env.local` wins, matching Next.js), so one file configures both. It
+> deliberately reads *nothing else* from there, keeping the app's secrets out of
+> the camera process. A real environment variable still beats the files:
+> `CAMERA_UVC_SIZE=1280x720 pnpm camera`.
 
 - `CAMERA_SERVICE_HOST` / `CAMERA_SERVICE_PORT` — bind address (default `127.0.0.1:8088`)
 - `CAMERA_SERVICE_URL` — full base URL the Next.js server uses to reach the service
@@ -87,6 +95,14 @@ UVC mode:
   reports the choice via `/status`. **Prefer the name on macOS** — indices are
   positional and shift as cameras come and go, so `0` is not a stable identity
   (`CAMERA_UVC_DEVICE="USB Video"`).
+- `CAMERA_UVC_SIZE` — the capture mode to ask the device for, as `WxH`
+  (`1920x1080`, `1280x720`, `640x480`). **This is the resolution setting.**
+  Unset, the device's own default is used (1920×1080 on most sticks). A device
+  exposes a fixed menu of modes, so it is a *request*: ffmpeg takes the closest
+  it can and `/status` reports the size that actually arrived — verified on this
+  booth, `1280x720` → 1280×720 and `640x480` → 640×480. Nothing downstream
+  rescales the picture, since upscaling adds no detail; asking the device is the
+  only real way to change it. A malformed value is ignored with a note in the log.
 - `CAMERA_UVC_INPUT_ARGS` — replaces the whole ffmpeg input specification
   (options **and** `-i <source>`). The escape hatch for a capture device ffmpeg
   needs spelled out: a specific `-video_size`, `-framerate` or `-pixel_format`,
@@ -94,12 +110,19 @@ UVC mode:
   reader is exercised without hardware, e.g.
   `CAMERA_UVC_INPUT_ARGS="-f lavfi -i testsrc2=size=1280x720:rate=30"`.
 - `CAMERA_UVC_CROP` — the black bars a capture device bakes into its frames.
-  Defaults to **auto-detect**: on each start the service measures the bars with
-  `cropdetect` (1–2 s, before any frame is served) and crops only when the probe
-  frames agree on it, the trim is symmetric and it is less than a fifth of a
-  side — a dark scene otherwise looks exactly like a border. Set it to
-  `W:H:X:Y` to pin one by hand (`1620:1080:150:0` for a 3:2 camera on a
-  1920×1080 stick) or to `none` to leave the frames untouched.
+  Defaults to **auto-detect**: on each start the service probes with
+  `cropdetect` (~3 s, before any frame is served) and crops only when the probe
+  frames **all** agree on the same crop, the bars sit on exactly **one** axis,
+  are symmetric *on that axis*, trim under a fifth of a side, and leave a shape
+  a signal can really be (3:2, 4:3, 16:9, …). Anything else means "not a bar" and
+  the frame is left alone — `cropdetect` reads *brightness*, so a dark scene,
+  a shadowed wall or the black column of SMPTE bars all look like a border, and a
+  wrong crop silently eats real picture while refusing one only leaves bars.
+  Set it to `W:H:X:Y` to pin one by hand (`1620:1080:150:0` for a 3:2 camera on
+  a 1920×1080 stick — also faster, since nothing is probed) or to `none` to
+  leave the frames untouched. A pinned crop **must match the size in use**: the
+  bars of a 1920×1080 frame are not the bars of a 1280×720 one, so if you set
+  `CAMERA_UVC_SIZE`, leave this on auto-detect.
 - `CAMERA_UVC_FILTER` — extra ffmpeg video filters appended after the rate cap,
   e.g. `transpose=1` for a capture stick that presents its HDMI input rotated.
 

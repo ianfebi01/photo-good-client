@@ -30,6 +30,7 @@ the camera's file transfer, and costs a UVC device nothing. The steady traffic
 also keeps a PTP body from dropping into its own auto-power-off between shots.
 """
 
+import errno
 import json
 import os
 import platform
@@ -41,6 +42,50 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import gphoto2 as gp
+
+
+def load_camera_env( root: str ) -> dict:
+    """`CAMERA_*` settings from `<root>/.env` and `<root>/.env.local`.
+
+    `pnpm camera` starts this process directly, so unlike the Next app it has no
+    dotenv of its own — a setting that only lived in `.env` would silently do
+    nothing here. Only CAMERA_* keys are read, so the sidecar never picks up the
+    app's secrets. `.env.local` wins over `.env`, matching Next.js; a real
+    environment variable still beats both (applied by the caller).
+    """
+    merged = {}
+    for name in (".env", ".env.local"):
+        try:
+            with open(os.path.join(root, name), "r", encoding="utf-8") as fh:
+                lines = fh.readlines()
+        except OSError:
+            continue
+        for raw in lines:
+            line = raw.strip()
+            if not line.startswith("export "):
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+            elif "=" not in line:
+                continue
+            else:
+                line = line[len("export ") :]
+            key, _, value = line.partition("=")
+            key = key.strip()
+            if not key.startswith("CAMERA_"):
+                continue
+            merged[key] = value.strip().strip( '"' ).strip( "'" )
+
+    return merged
+
+
+def _load_dotenv():
+    """Apply the repo's CAMERA_* settings before anything reads them."""
+    root = os.path.dirname( os.path.dirname( os.path.abspath( __file__ ) ) )
+    for key, value in load_camera_env( root ).items():
+        os.environ.setdefault( key, value )
+
+
+_load_dotenv()
 
 HOST = os.environ.get("CAMERA_SERVICE_HOST", "127.0.0.1")
 PORT = int(os.environ.get("CAMERA_SERVICE_PORT", "8088"))
@@ -84,13 +129,25 @@ UVC_QUALITY = 4  # ffmpeg -q:v, 2 (best) .. 31 (worst)
 # can look like a border. A detection is therefore only accepted when the probe
 # frames agree, the trim is symmetric (how a scaler pads) and it is small. Set
 # CAMERA_UVC_CROP to "W:H:X:Y" to pin one by hand, or "none" to disable this.
-UVC_CROP_PROBE_FRAMES = 5
+UVC_CROP_PROBE_FRAMES = 8
 UVC_CROP_PROBE_FPS = 4
-UVC_CROP_BLACK = 24          # cropdetect luma threshold, 0–255
+# Only *near*-black counts as a bar: the pad a scaler adds is true black, while
+# dark picture has some level in it. A permissive limit is how a shadowed wall
+# gets mistaken for a border.
+UVC_CROP_BLACK = 16
 UVC_CROP_MAX_TRIM = 0.2      # never believe a crop that eats a fifth of a side
 UVC_CROP_TOLERANCE = 8       # px of asymmetry a scaler may leave behind
+# Aspects a padded signal can actually have (a camera's video output is 3:2,
+# 4:3 or 16:9). A crop that lands on one of these is a signal shape; one that
+# does not is content that merely looked black at the edge.
+UVC_CROP_ASPECTS = (
+    1.0, 1.25, 1.3333, 1.5, 1.6, 1.6667, 1.7778, 1.85, 1.9, 2.0, 2.35, 2.39,
+)
+UVC_CROP_ASPECT_TOLERANCE = 0.02
 UVC_CROP_PATTERN = re.compile( r"crop=(\d{2,5}):(\d{2,5}):(\d{1,5}):(\d{1,5})" )
 UVC_INPUT_SIZE = re.compile( r"Stream #0:0: Video: .*?(\d{2,5})x(\d{2,5})" )
+# A requested capture mode, e.g. "1280x720" (see CAMERA_UVC_SIZE).
+UVC_SIZE_PATTERN = re.compile( r"^\d{2,5}x\d{2,5}$" )
 
 # Where the chosen source is remembered so a restart does not undo the toggle.
 STATE_PATH = os.path.join(
@@ -160,17 +217,42 @@ def ffmpeg_available() -> bool:
         return False
 
 
+def uvc_requested_size() -> list:
+    """`-video_size WxH` for the mode CAMERA_UVC_SIZE asks for, or [] for the
+    device default.
+
+    A capture device exposes a fixed menu of modes, so this is a request rather
+    than a guarantee: ffmpeg picks the closest thing it can, and /status reports
+    the size that actually arrived. Ignored with a note when malformed, because a
+    bad value here would otherwise surface as an unexplained missing preview.
+    """
+    size = os.environ.get("CAMERA_UVC_SIZE", "").strip()
+    if not size:
+        return []
+    if not UVC_SIZE_PATTERN.match( size ):
+        print(
+            f"[camera-service] ignoring CAMERA_UVC_SIZE={size!r} "
+            "(expected WxH, e.g. 1280x720)",
+            flush=True,
+        )
+        return []
+
+    return ["-video_size", size]
+
+
 def uvc_input_args( device: str ) -> list:
     """ffmpeg *input specification* (input options plus `-i <source>`).
 
     CAMERA_UVC_INPUT_ARGS replaces this wholesale — the escape hatch for devices
     ffmpeg needs spelled out (a specific pixel format or video_size, a second
     capture device, a network source) and how this reader is exercised without
-    hardware.
+    hardware. CAMERA_UVC_SIZE is the plain way to ask for a capture mode.
     """
     override = os.environ.get("CAMERA_UVC_INPUT_ARGS")
     if override:
         return shlex.split( override )
+
+    size = uvc_requested_size()
 
     if IS_DARWIN:
         # AVFoundation addresses devices by index ("0") or by name, and defaults
@@ -184,11 +266,12 @@ def uvc_input_args( device: str ) -> list:
             "30",
             "-pixel_format",
             "uyvy422",
+            *size,
             "-i",
             device or "0",
         ]
 
-    return ["-f", "v4l2", "-i", device or "/dev/video0"]
+    return ["-f", "v4l2", *size, "-i", device or "/dev/video0"]
 
 
 def build_uvc_command( device: str, crop: str = "" ) -> list:
@@ -244,7 +327,7 @@ def pick_crop( size, crops ) -> str:
     for crop in crops:
         counts[crop] = counts.get( crop, 0 ) + 1
     crop, votes = max( counts.items(), key=lambda item: item[1] )
-    if votes < max( 2, len( crops ) * 0.7 ):
+    if votes != len( crops ) or votes < 3:
         return ""
 
     w, h, x, y = ( int( part ) for part in crop )
@@ -253,21 +336,38 @@ def pick_crop( size, crops ) -> str:
 
     left, right = x, width - w - x
     top, bottom = y, height - h - y
+    bars_x, bars_y = left or right, top or bottom
 
-    # A scaler pads evenly, so real bars are symmetric — content that merely
-    # looks black at the edges almost never is.
-    if not (
-        abs( left - right ) <= UVC_CROP_TOLERANCE
-        or abs( top - bottom ) <= UVC_CROP_TOLERANCE
-    ):
+    # A scaler pads ONE axis. Black on both means the detector is reading the
+    # scene, not the signal.
+    if bars_x and bars_y:
+        return ""
+    if not ( bars_x or bars_y ):
+        return ""
+
+    # ...and it pads that axis evenly. This is the check that matters: with no
+    # trim on the other axis the symmetry test is vacuous, so a band of dark
+    # scene on one side only (262px off the right, measured on this booth's
+    # stick) must fail here — cropping to it would cut real picture.
+    if bars_x and abs( left - right ) > UVC_CROP_TOLERANCE:
+        return ""
+    if bars_y and abs( top - bottom ) > UVC_CROP_TOLERANCE:
         return ""
 
     # A real pad is a modest slice of one side (a 3:2 image in a 16:9 frame is
-    # 8% each side, 4:3 is 12.5%). More than that means a dark scene fooled the
-    # detector, and cutting it would lose actual picture.
+    # 8% each side, 4:3 is 12.5%).
     if max( left, right ) > width * UVC_CROP_MAX_TRIM:
         return ""
     if max( top, bottom ) > height * UVC_CROP_MAX_TRIM:
+        return ""
+
+    # And the result has to be a shape a signal can be — the tie-breaker that
+    # rejects a crop which passes the geometry checks by coincidence.
+    aspect = w / h
+    if not any(
+        abs( aspect - shape ) <= UVC_CROP_ASPECT_TOLERANCE * shape
+        for shape in UVC_CROP_ASPECTS
+    ):
         return ""
 
     return f"{w}:{h}:{x}:{y}"
@@ -1164,13 +1264,29 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    # Claim the port FIRST. The camera itself is exclusive (PTP, and
+    # AVFoundation for a capture device), so a second copy of this service that
+    # started its reader before noticing the clash would fight the first one for
+    # the device — and then fail anyway.
+    try:
+        server = ThreadingHTTPServer((HOST, PORT), Handler)
+    except OSError as err:
+        if err.errno == errno.EADDRINUSE:
+            print(
+                f"[camera-service] http://{HOST}:{PORT} is already in use — a "
+                "camera service is already running. Nothing to do; stop that one "
+                "(`lsof -nP -iTCP:%s -sTCP:LISTEN`) to restart it." % PORT,
+                flush=True,
+            )
+            return
+        raise
+
     # libgphoto2 does a one-time driver + USB port scan on the first init(),
     # which can take several seconds. The pump starts it off-thread, so it both
     # warms that up and has a frame waiting before the first client arrives.
     manager.start_pump()
-
-    server = ThreadingHTTPServer((HOST, PORT), Handler)
     print(f"[camera-service] listening on http://{HOST}:{PORT}", flush=True)
+
     try:
         server.serve_forever()
     except KeyboardInterrupt:

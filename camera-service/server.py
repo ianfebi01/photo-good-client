@@ -116,6 +116,9 @@ MODES = (MODE_GPHOTO, MODE_UVC)
 # (most HDMI dongles do 1080p30 / 4K30), so this only ever drops frames.
 UVC_FPS = 25
 UVC_QUALITY = 4  # ffmpeg -q:v, 2 (best) .. 31 (worst)
+# The booth's capture device on macOS. Use its label instead of index 1 because
+# AVFoundation reassigns indices when cameras are connected or removed.
+MACOS_UVC_DEVICE = "USB Video"
 
 # ── Baked-in black bars ──────────────────────────────────────────────
 #
@@ -567,7 +570,9 @@ class CameraManager:
         # Explicit request only (env or a switch). A device remembered from a
         # previous run is kept to one side and re-resolved by name, because the
         # id it was stored as may point somewhere else by now.
-        self._device = os.environ.get("CAMERA_UVC_DEVICE") or ""
+        self._device = os.environ.get("CAMERA_UVC_DEVICE") or (
+            MACOS_UVC_DEVICE if IS_DARWIN else ""
+        )
         self._remembered = stored_device or ""
         self._remembered_label = stored_label or ""
         self._gen = 0

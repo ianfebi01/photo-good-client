@@ -54,3 +54,5 @@ next-env.d.ts
 
 .omc
 .claude
+
+camera-service/__pycache__

@@ -38,6 +38,21 @@ import { ChevronRight } from 'lucide-react'
  * also sets the result video's duration: the mashup runs as long as its clips.
  */
 const COUNTDOWN_SECS = 5
+const CAPTURE_SOURCE_ASPECT = 3 / 2
+
+function getPanBounds( slot: { width: number; height: number }, zoom: number ) {
+  const coverScale = Math.max(
+    slot.width / CAPTURE_SOURCE_ASPECT,
+    slot.height,
+  )
+  const renderedWidth = CAPTURE_SOURCE_ASPECT * coverScale * zoom
+  const renderedHeight = coverScale * zoom
+
+  return {
+    x : Math.max( 0, ( renderedWidth - slot.width ) / 2 ),
+    y : Math.max( 0, ( renderedHeight - slot.height ) / 2 ),
+  }
+}
 
 export function StepCapture() {
   const {
@@ -154,9 +169,9 @@ export function StepCapture() {
     ( i: number ) => {
       if ( reviewing ) return i === activeSlotIdx
 
-      return i < photos.length && adjustments[i].zoom > 1
+      return i < photos.length
     },
-    [reviewing, activeSlotIdx, photos.length, adjustments],
+    [reviewing, activeSlotIdx, photos.length],
   )
 
   // pending takes priority over stored photo when reviewing its slot
@@ -238,12 +253,11 @@ export function StepCapture() {
       const current = useBoothStore.getState().adjustments[i]
       const slot = frame.slots[i]
       // Bounds are frame pixels, matching what the store holds.
-      const maxDx = slot ? ( slot.width * ( clampedZoom - 1 ) ) / 2 : 0
-      const maxDy = slot ? ( slot.height * ( clampedZoom - 1 ) ) / 2 : 0
+      const bounds = slot ? getPanBounds( slot, clampedZoom ) : { x : 0, y : 0 }
       patchAdjustment( i, {
         zoom : clampedZoom,
-        x    : Math.max( -maxDx, Math.min( maxDx, current.x ) ),
-        y    : Math.max( -maxDy, Math.min( maxDy, current.y ) ),
+        x    : Math.max( -bounds.x, Math.min( bounds.x, current.x ) ),
+        y    : Math.max( -bounds.y, Math.min( bounds.y, current.y ) ),
       } )
     },
     [frame, patchAdjustment],
@@ -256,12 +270,11 @@ export function StepCapture() {
       const scale = getScale() || 1
       const slot = frame.slots[activeSlotIdx]
       const zoom = useBoothStore.getState().adjustments[activeSlotIdx].zoom
-      const maxDx = slot ? ( slot.width * ( zoom - 1 ) ) / 2 : 0
-      const maxDy = slot ? ( slot.height * ( zoom - 1 ) ) / 2 : 0
+      const bounds = slot ? getPanBounds( slot, zoom ) : { x : 0, y : 0 }
       // Screen pixels → frame pixels, so the stored pan is preview-size agnostic.
       patchAdjustment( activeSlotIdx, {
-        x : Math.max( -maxDx, Math.min( maxDx, initX + ( e.clientX - startX ) / scale ) ),
-        y : Math.max( -maxDy, Math.min( maxDy, initY + ( e.clientY - startY ) / scale ) ),
+        x : Math.max( -bounds.x, Math.min( bounds.x, initX + ( e.clientX - startX ) / scale ) ),
+        y : Math.max( -bounds.y, Math.min( bounds.y, initY + ( e.clientY - startY ) / scale ) ),
       } )
     },
     [activeSlotIdx, frame, getScale, patchAdjustment],
@@ -290,11 +303,10 @@ export function StepCapture() {
       const scale = getScale() || 1
       const slot = frame.slots[activeSlotIdx]
       const zoom = useBoothStore.getState().adjustments[activeSlotIdx].zoom
-      const maxDx = slot ? ( slot.width * ( zoom - 1 ) ) / 2 : 0
-      const maxDy = slot ? ( slot.height * ( zoom - 1 ) ) / 2 : 0
+      const bounds = slot ? getPanBounds( slot, zoom ) : { x : 0, y : 0 }
       patchAdjustment( activeSlotIdx, {
-        x : Math.max( -maxDx, Math.min( maxDx, initX + ( touch.clientX - startX ) / scale ) ),
-        y : Math.max( -maxDy, Math.min( maxDy, initY + ( touch.clientY - startY ) / scale ) ),
+        x : Math.max( -bounds.x, Math.min( bounds.x, initX + ( touch.clientX - startX ) / scale ) ),
+        y : Math.max( -bounds.y, Math.min( bounds.y, initY + ( touch.clientY - startY ) / scale ) ),
       } )
     },
     [activeSlotIdx, frame, getScale, patchAdjustment],

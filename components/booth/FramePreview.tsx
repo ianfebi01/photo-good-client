@@ -5,6 +5,8 @@ import type { ClientFrame } from '@/lib/photobooth/frames.client'
 import type { Shot } from '@/store/boothStore'
 import { getCSSFilter } from './filters'
 
+const CAPTURE_SOURCE_ASPECT = 3 / 2
+
 interface FramePreviewProps {
   frame: ClientFrame
   photos: Shot[]
@@ -87,7 +89,9 @@ export function FramePreview( {
             // at any preview scale.
             const shiftX = slot.width ? ( adj.x / slot.width ) * 100 : 0
             const shiftY = slot.height ? ( adj.y / slot.height ) * 100 : 0
-            const transform = `translate(${shiftX}%, ${shiftY}%) scale(${adj.zoom})`
+            const slotAspect = slot.width / slot.height
+            const imageWidth = Math.max( 1, CAPTURE_SOURCE_ASPECT / slotAspect ) * adj.zoom * 100
+            const imageHeight = Math.max( 1, slotAspect / CAPTURE_SOURCE_ASPECT ) * adj.zoom * 100
 
             return (
               <div
@@ -113,10 +117,11 @@ export function FramePreview( {
                     alt={`Slot ${i + 1}`}
                     className="absolute pointer-events-none select-none max-w-none"
                     style={{
-                      width     : '100%',
-                      height    : '100%',
-                      objectFit : 'cover',
-                      transform,
+                      width     : `${imageWidth}%`,
+                      height    : `${imageHeight}%`,
+                      left      : `calc(50% + ${shiftX}%)`,
+                      top       : `calc(50% + ${shiftY}%)`,
+                      transform : 'translate(-50%, -50%)',
                       filter    : getCSSFilter( globalFilter ),
                     }}
                   />

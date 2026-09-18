@@ -352,6 +352,9 @@ export function StepCapture() {
       globalFilter="none"
       flash={flash}
       mirrorCamera={mirrorCamera}
+      captureSlot={
+        frame?.slots[reviewing ? ( targetSlotIdx ?? photos.length ) : photos.length] ?? null
+      }
     />
   )
 

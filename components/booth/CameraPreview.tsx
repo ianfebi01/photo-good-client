@@ -15,6 +15,7 @@ interface CameraPreviewProps {
   globalFilter: string
   flash: boolean
   mirrorCamera: boolean
+  captureSlot: { width: number; height: number } | null
   className?: string
 }
 
@@ -26,11 +27,17 @@ export function CameraPreview( {
   globalFilter,
   flash,
   mirrorCamera,
+  captureSlot,
   className,
 }: CameraPreviewProps ) {
   const showStream = phase !== 'reviewing' && phase !== 'adjusting'
   const running = phase === 'running'
   const composing = phase === 'composing'
+  const showCaptureGuide = showStream && captureSlot !== null
+  const slotAspect = captureSlot
+    ? captureSlot.width / captureSlot.height
+    : 1
+  const cameraAspect = 3 / 2
 
   const liveImgRef = useRef<HTMLImageElement | null>( null )
   const frozenRef = useRef<HTMLCanvasElement | null>( null )
@@ -103,6 +110,25 @@ export function CameraPreview( {
           ref={frozenRef}
           className="absolute inset-0 h-full w-full object-cover z-10"
         />
+      )}
+
+      {showCaptureGuide && (
+        <div className="pointer-events-none absolute inset-0 z-15 flex items-center justify-center">
+          <div
+            className="border-2 border-dashed border-white/90 shadow-[0_0_0_9999px_rgba(0,0,0,0.32)]"
+            style={
+              cameraAspect > slotAspect
+                ? {
+                  height      : '100%',
+                  aspectRatio : `${captureSlot.width} / ${captureSlot.height}`,
+                }
+                : {
+                  width       : '100%',
+                  aspectRatio : `${captureSlot.width} / ${captureSlot.height}`,
+                }
+            }
+          />
+        </div>
       )}
 
       {running && (

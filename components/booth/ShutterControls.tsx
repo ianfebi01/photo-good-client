@@ -1,4 +1,4 @@
-import { CheckIcon, RotateCcw } from 'lucide-react'
+import { CheckIcon, FlipHorizontal2, RotateCcw } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 
@@ -15,6 +15,8 @@ interface ShutterControlsProps {
   onAccept: () => void
   onCompose: () => void
   onSnap: () => void
+  mirrorCamera: boolean
+  onToggleMirror: () => void
 }
 
 export function ShutterControls( {
@@ -29,6 +31,8 @@ export function ShutterControls( {
   onAccept,
   onCompose,
   onSnap,
+  mirrorCamera,
+  onToggleMirror,
 }: ShutterControlsProps ) {
   return (
     <div className="relative xl:grow">
@@ -113,15 +117,32 @@ export function ShutterControls( {
               </span>
             </div>
           ) : (
-            <button
-              onClick={onSnap}
-              disabled={!canCapture}
-              className="group relative flex h-20 w-20 items-center justify-center cursor-pointer disabled:cursor-not-allowed select-none rounded-full focus:outline-none disabled:opacity-50"
-              title="Snap"
-            >
-              <span className="absolute inset-0 rounded-full border-[3px] border-primary" />
-              <span className="absolute inset-1.5 rounded-full bg-primary transition-transform duration-150 group-hover:scale-105 group-active:scale-90 group-disabled:scale-100" />
-            </button>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={onToggleMirror}
+                aria-pressed={mirrorCamera}
+                className={cn(
+                  'flex size-10 items-center justify-center rounded-full border transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary',
+                  mirrorCamera
+                    ? 'border-primary bg-primary/10 text-primary'
+                    : 'border-neutral-300 text-neutral-400 hover:border-neutral-500 hover:text-neutral-600',
+                )}
+                title={mirrorCamera ? 'Turn off mirror' : 'Mirror camera'}
+                aria-label={mirrorCamera ? 'Turn off mirror' : 'Mirror camera'}
+              >
+                <FlipHorizontal2 className="size-5" />
+              </button>
+              <button
+                onClick={onSnap}
+                disabled={!canCapture}
+                className="group relative flex h-20 w-20 items-center justify-center cursor-pointer disabled:cursor-not-allowed select-none rounded-full focus:outline-none disabled:opacity-50"
+                title="Snap"
+              >
+                <span className="absolute inset-0 rounded-full border-[3px] border-primary" />
+                <span className="absolute inset-1.5 rounded-full bg-primary transition-transform duration-150 group-hover:scale-105 group-active:scale-90 group-disabled:scale-100" />
+              </button>
+            </div>
           )}
         </div>
       )}

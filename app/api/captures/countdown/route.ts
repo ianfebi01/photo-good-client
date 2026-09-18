@@ -69,12 +69,14 @@ export async function POST( request: Request ) {
   let index = 0;
   let durationSec = 3;
   let streamUrl = "";
+  let mirror = false;
   try {
     const body = await request.json();
     sessionId = String( body.sessionId ?? "" );
     index = Number( body.index ?? 0 );
     durationSec = Number( body.durationSec ?? 3 );
     streamUrl = String( body.streamUrl ?? "" );
+    mirror = body.mirror === true;
   } catch {
     return Response.json( { error : "Invalid JSON body" }, { status : 400 } );
   }
@@ -98,7 +100,13 @@ export async function POST( request: Request ) {
 
   try {
     const source = await resolveStreamUrl( streamUrl, new URL( request.url ).origin );
-    const clip = await recordCountdownClip( sessionId, index, source, durationSec );
+    const clip = await recordCountdownClip(
+      sessionId,
+      index,
+      source,
+      durationSec,
+      mirror,
+    );
 
     // A clip with too few frames is dropped rather than stored: it would encode
     // to a stub that breaks the countdown mashup. The capture itself is fine.

@@ -58,6 +58,8 @@ export function StepCapture() {
     adjustments,
     patchAdjustment,
     resetAdjustment,
+    mirrorCamera,
+    toggleMirrorCamera,
   } = useBoothStore()
 
   const frame = frames.find( ( f ) => f.key === frameKey ) ?? frames[0]
@@ -84,6 +86,7 @@ export function StepCapture() {
         index,
         durationSec : COUNTDOWN_SECS,
         streamUrl   : liveSrc,
+        mirror      : mirrorCamera,
       } ),
     )
       .then( ( clip ) => {
@@ -104,7 +107,7 @@ export function StepCapture() {
         // eslint-disable-next-line no-console
         console.warn( `Countdown clip ${index} failed:`, err )
       } )
-  }, [liveSrc] )
+  }, [liveSrc, mirrorCamera] )
 
   const canCapture =
     !busy &&
@@ -334,6 +337,8 @@ export function StepCapture() {
       onAccept={handleAcceptPending}
       onCompose={handleGoToFilter}
       onSnap={handleSnap}
+      mirrorCamera={mirrorCamera}
+      onToggleMirror={toggleMirrorCamera}
     />
   )
 
@@ -346,6 +351,7 @@ export function StepCapture() {
       activePhoto={activePhoto}
       globalFilter="none"
       flash={flash}
+      mirrorCamera={mirrorCamera}
     />
   )
 

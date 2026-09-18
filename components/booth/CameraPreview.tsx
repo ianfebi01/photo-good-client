@@ -14,6 +14,7 @@ interface CameraPreviewProps {
   activePhoto: Shot | null
   globalFilter: string
   flash: boolean
+  mirrorCamera: boolean
   className?: string
 }
 
@@ -24,6 +25,7 @@ export function CameraPreview( {
   activePhoto,
   globalFilter,
   flash,
+  mirrorCamera,
   className,
 }: CameraPreviewProps ) {
   const showStream = phase !== 'reviewing' && phase !== 'adjusting'
@@ -44,8 +46,14 @@ export function CameraPreview( {
     if ( !img || !canvas || !img.naturalWidth || !img.naturalHeight ) return
     canvas.width = img.naturalWidth
     canvas.height = img.naturalHeight
-    canvas.getContext( '2d' )?.drawImage( img, 0, 0 )
-  }, [running] )
+    const context = canvas.getContext( '2d' )
+    if ( !context ) return
+    if ( mirrorCamera ) {
+      context.translate( canvas.width, 0 )
+      context.scale( -1, 1 )
+    }
+    context.drawImage( img, 0, 0 )
+  }, [mirrorCamera, running] )
 
   return (
     <div className={cn( 'relative overflow-hidden w-full h-auto xl:w-auto xl:rounded-3xl hover:shadow-xl transition-all duration-300 ease-in-out', className )}
@@ -56,7 +64,10 @@ export function CameraPreview( {
           key="stream"
           ref={liveImgRef}
           src={liveSrc}
-          className="absolute inset-0 h-full w-full object-cover scale-x-[-1]"
+          className={cn(
+            'absolute inset-0 h-full w-full object-cover',
+            mirrorCamera && 'scale-x-[-1]',
+          )}
         />
       ) : pending ? (
         // eslint-disable-next-line @next/next/no-img-element

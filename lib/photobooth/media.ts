@@ -795,6 +795,7 @@ export async function recordCountdownClip(
   index: number,
   streamUrl: string,
   durationSec: number,
+  mirror = false,
 ): Promise<{ file: string; url: string } | null> {
   const hasFfmpeg = await ffmpegAvailable()
   if ( !hasFfmpeg ) return null
@@ -833,7 +834,7 @@ export async function recordCountdownClip(
       "-t", String( duration ),
       // `fps` gives a constant-rate output from the arrival timestamps;
       // the odd-sized crop keeps any stream legal for yuv420p.
-      "-vf", `fps=${CLIP_FPS},scale=trunc(iw/2)*2:trunc(ih/2)*2`,
+      "-vf", `${mirror ? "hflip," : ""}fps=${CLIP_FPS},scale=trunc(iw/2)*2:trunc(ih/2)*2`,
       "-c:v", "libx264",
       "-preset", "veryfast",
       "-crf", "18",

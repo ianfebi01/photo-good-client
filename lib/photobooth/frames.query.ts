@@ -246,9 +246,11 @@ export async function setCameraMode(
 export async function captureShot( {
   sessionId,
   index,
+  mirror = false,
 }: {
   sessionId: string;
   index: number;
+  mirror?: boolean;
 } ): Promise<{ file: string; url: string }> {
   const base = await ensureCameraDiscovered();
 
@@ -267,7 +269,7 @@ export async function captureShot( {
       throw new Error( "Local snapshot failed" );
     }
 
-    const blob = await captureRes.blob();
+    const blob = mirror ? await mirrorImageBlob( await captureRes.blob() ) : await captureRes.blob();
     const form = new FormData();
     form.append( "file", blob, `shot-${sessionId}-${index}.jpg` );
     form.append( "sessionId", sessionId );
@@ -292,6 +294,27 @@ export async function captureShot( {
   } );
 
   return parseJson( response, "Capture failed" );
+}
+
+async function mirrorImageBlob( blob: Blob ): Promise<Blob> {
+  const bitmap = await createImageBitmap( blob )
+  const canvas = document.createElement( 'canvas' )
+  canvas.width = bitmap.width
+  canvas.height = bitmap.height
+  const context = canvas.getContext( '2d' )
+  if ( !context ) {
+    bitmap.close()
+
+    return blob
+  }
+  context.translate( bitmap.width, 0 )
+  context.scale( -1, 1 )
+  context.drawImage( bitmap, 0, 0 )
+  bitmap.close()
+
+  return new Promise( ( resolve ) => {
+    canvas.toBlob( ( mirrored ) => resolve( mirrored ?? blob ), 'image/jpeg', 0.95 )
+  } )
 }
 
 export async function composeStrip( {
@@ -396,16 +419,18 @@ export async function recordCountdownClip( {
   index,
   durationSec,
   streamUrl,
+  mirror = false,
 }: {
   sessionId: string
   index: number
   durationSec: number
   streamUrl: string
+  mirror?: boolean
 } ): Promise<{ file: string; url: string } | null> {
   const response = await fetch( '/api/captures/countdown', {
     method  : 'POST',
     headers : { 'Content-Type' : 'application/json' },
-    body    : JSON.stringify( { sessionId, index, durationSec, streamUrl } ),
+    body    : JSON.stringify( { sessionId, index, durationSec, streamUrl, mirror } ),
   } )
   // 501 = no ffmpeg, 422 = nothing usable recorded — both mean "no clip".
   if ( response.status === 501 || response.status === 422 ) return null

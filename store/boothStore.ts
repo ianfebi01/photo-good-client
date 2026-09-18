@@ -118,6 +118,8 @@ export interface BoothState {
   timerSecondsLeft: number | null;
   /** Kiosk config: skip the shutter countdown and capture instantly. */
   disableCountdown: boolean;
+  /** Mirror the live preview and captured photos horizontally. */
+  mirrorCamera: boolean;
 
   // ── Per-booth settings (transient) ─────────────────
   /**
@@ -168,6 +170,7 @@ export interface BoothState {
   setTimerEnabled: ( enabled: boolean ) => void;
   setTimerSecondsLeft: ( seconds: number | null ) => void;
   setDisableCountdown: ( disabled: boolean ) => void;
+  toggleMirrorCamera: () => void;
   setSettings: ( settings: BoothClientSettings ) => void;
   resetTimer: () => void;
   setAdjustments: ( adjustments: SlotAdjustment[] ) => void;
@@ -225,6 +228,7 @@ export const useBoothStore = create<BoothState>()(
     timerEnabled     : false,
     timerSecondsLeft : null,
     disableCountdown : false,
+    mirrorCamera     : true,
     settings         : null,
     globalFilter     : 'none',
     adjustments      : createDefaultAdjustments(),
@@ -309,7 +313,7 @@ export const useBoothStore = create<BoothState>()(
 
     // ── Capture a shot ─────────────────────────────
     takeShot : async ( replaceIndex ) => {
-      const { photos, frames, frameKey } = get();
+      const { photos, frames, frameKey, mirrorCamera } = get();
       const frame = frames.find( ( f ) => f.key === frameKey ) ?? frames[0];
       const photoCount = frame?.photoCount ?? 0;
 
@@ -327,7 +331,11 @@ export const useBoothStore = create<BoothState>()(
         if ( !sessionId ) set( { sessionId : activeSession } );
         const index = replaceIndex ?? photos.length;
 
-        const data = await captureShot( { sessionId : activeSession, index } );
+        const data = await captureShot( {
+          sessionId : activeSession,
+          index,
+          mirror    : mirrorCamera,
+        } );
 
         set( {
           pending : { file : data.file, url : `${data.url}?v=${newId()}` },
@@ -438,6 +446,7 @@ export const useBoothStore = create<BoothState>()(
     setTimerEnabled     : ( enabled ) => set( { timerEnabled : enabled } ),
     setTimerSecondsLeft : ( seconds ) => set( { timerSecondsLeft : seconds } ),
     setDisableCountdown : ( disabled ) => set( { disableCountdown : disabled } ),
+    toggleMirrorCamera  : () => set( ( state ) => ( { mirrorCamera : !state.mirrorCamera } ) ),
 
     // ── Per-booth settings ─────────────────────────
     // The server owns the idle step timer toggle, so mirror it here.

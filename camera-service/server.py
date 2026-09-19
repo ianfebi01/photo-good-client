@@ -79,10 +79,21 @@ def load_camera_env( root: str ) -> dict:
 
 
 def _load_dotenv():
-    """Apply the repo's CAMERA_* settings before anything reads them."""
-    root = os.path.dirname( os.path.dirname( os.path.abspath( __file__ ) ) )
-    for key, value in load_camera_env( root ).items():
-        os.environ.setdefault( key, value )
+    """Apply camera-service settings before anything reads them.
+
+    In development the files live at the repository root. In the packaged
+    Electron app they are copied beside this script under Resources/camera-service,
+    so check the script directory first and the parent as a fallback. Real
+    environment variables still win because setdefault never overwrites them.
+    """
+    service_root = os.path.dirname( os.path.abspath( __file__ ) )
+    roots = (
+        service_root,
+        os.path.dirname( service_root ),
+    )
+    for root in roots:
+        for key, value in load_camera_env( root ).items():
+            os.environ.setdefault( key, value )
 
 
 _load_dotenv()

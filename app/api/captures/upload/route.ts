@@ -65,7 +65,7 @@ export async function POST( request: Request ) {
     await writeFile( path.join( CAPTURES_DIR, name ), buffer );
     await saveRawCopy( sessionId, index, buffer );
 
-    return Response.json( { file : name, url : `/captures/${name}` } );
+    return Response.json( { file : name, url : `/api/captures/${name}` } );
   } catch ( err ) {
     return Response.json(
       { error : err instanceof Error ? err.message : "Upload failed" },

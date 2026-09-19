@@ -2,12 +2,19 @@
   "name": "photo-good",
   "version": "0.1.0",
   "private": true,
+  "description": "Photo Good photobooth",
+  "author": "Photo Good",
+  "main": "electron/main.cjs",
   "packageManager": "pnpm@10.26.2+sha512.0e308ff2005fc7410366f154f625f6631ab2b16b1d2e70238444dd6ae9d630a8482d92a451144debc492416896ed16f7b114a86ec68b8404b2443869e68ffda6",
   "scripts": {
     "dev": "next dev",
     "dev:ip": "bash scripts/dev.sh",
     "build": "next build",
     "start": "next start",
+    "electron:prepare": "node scripts/prepare-electron.mjs",
+    "electron:dev": "pnpm build && pnpm electron:prepare && electron .",
+    "electron:build": "pnpm build && pnpm electron:prepare && electron-builder --mac --dir",
+    "electron:installer": "pnpm build && pnpm electron:prepare && electron-builder --mac dmg",
     "lint": "eslint",
     "camera:setup": "bash camera-service/setup.sh",
     "camera": "camera-service/.venv/bin/python3 camera-service/server.py",
@@ -41,12 +48,50 @@
     "@types/qrcode": "^1.5.6",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "electron-builder": "^26.15.3",
     "eslint": "^9",
     "eslint-config-next": "16.2.6",
     "eslint-plugin-react": "^7.37.5",
     "tailwindcss": "^4",
     "tsx": "^4.22.4",
     "typescript": "^5",
+    "electron": "^44.4.2",
+    "electron-builder": "^26.15.3",
     "typescript-eslint": "^8.60.0"
+  },
+  "build": {
+    "appId": "com.photogood.booth",
+    "productName": "Photo Good Booth",
+    "asar": true,
+    "asarUnpack": [
+      ".next/standalone/**/*"
+    ],
+    "files": [
+      "electron/**/*",
+      "scripts/prepare-electron.mjs",
+      ".next/standalone/**/*",
+      "public/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "target": ["dir"],
+      "category": "public.app-category.photography",
+      "identity": null
+    },
+    "extraResources": [
+      {
+        "from": "camera-service",
+        "to": "camera-service",
+        "filter": ["**/*"]
+      },
+      {
+        "from": ".env",
+        "to": "camera-service/.env"
+      },
+      {
+        "from": ".env.local",
+        "to": "camera-service/.env.local"
+      }
+    ]
   }
 }

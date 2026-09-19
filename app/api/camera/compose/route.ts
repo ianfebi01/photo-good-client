@@ -62,7 +62,7 @@ export async function POST( request: Request ) {
     const name = `strip-${sessionId}-${frameKey}.jpg`;
     await writeFile( path.join( CAPTURES_DIR, name ), strip );
 
-    return Response.json( { file : name, url : `/captures/${name}` } );
+    return Response.json( { file : name, url : `/api/captures/${name}` } );
   } catch ( err ) {
     return Response.json(
       { error : err instanceof Error ? err.message : "Compose failed" },

@@ -171,7 +171,7 @@ export async function generateGif(
       }
     } );
 
-    return { file : gifName, url : `/captures/${gifName}` };
+    return { file : gifName, url : `/api/captures/${gifName}` };
   } );
 }
 
@@ -338,7 +338,7 @@ export async function generateSlideshowVideo(
       await unlink( listPath ).catch( () => {} );
     }
 
-    return { file : vidName, url : `/captures/${vidName}` };
+    return { file : vidName, url : `/api/captures/${vidName}` };
   } );
 }
 
@@ -616,7 +616,7 @@ async function buildCountdownMashup(
     } )
   } ) )
 
-  return { file : vidName, url : `/captures/${vidName}` }
+  return { file : vidName, url : `/api/captures/${vidName}` }
 }
 
 /** Resolve frame image to a pre-keyed RGBA PNG that ffmpeg can overlay directly.
@@ -756,7 +756,7 @@ async function buildLoopVideo(
     } )
   } ) )
 
-  return { file : vidName, url : `/captures/${vidName}` }
+  return { file : vidName, url : `/api/captures/${vidName}` }
 }
 
 // ── Countdown clip recording ──────────────────────────────────────
@@ -877,7 +877,7 @@ export async function recordCountdownClip(
     path.join( CAPTURES_DIR, `countdown-${sessionId}-${index}.webm` ),
   ).catch( () => {} )
 
-  return { file : clipName, url : `/captures/${clipName}` }
+  return { file : clipName, url : `/api/captures/${clipName}` }
 }
 
 // ── Save raw (unprocessed copy) ────────────────────────────────────

@@ -47,7 +47,9 @@ export async function externalFetch( pathOrUrl: string, init?: RequestInit ): Pr
 }
 
 /** Absolute directory where captures and composed strips are written. */
-export const CAPTURES_DIR = path.join( process.cwd(), "public", "captures" );
+export const CAPTURES_DIR = process.env.CAPTURES_DIR
+  ? path.resolve( process.env.CAPTURES_DIR )
+  : path.join( process.cwd(), "public", "captures" );
 
 /**
  * Set PHOTOBOOTH_MOCK=1 to force the simulated camera even when a real one is

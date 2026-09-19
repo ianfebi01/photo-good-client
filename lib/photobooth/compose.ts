@@ -22,7 +22,13 @@ async function getFrameImageBuffer( frame: FrameDef ): Promise<Buffer> {
     return readFile( frame.image );
   }
 
-  const res = await externalFetch( frame.publicUrl );
+  let res: Response
+  try {
+    res = await externalFetch( frame.publicUrl );
+  } catch ( err ) {
+    const reason = err instanceof Error ? `: ${err.message}` : ""
+    throw new Error( `Frame artwork fetch failed (${frame.publicUrl})${reason}` )
+  }
   if ( !res.ok ) throw new Error( `Failed to fetch frame image: ${res.statusText}` );
 
   return Buffer.from( await res.arrayBuffer() );

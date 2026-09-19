@@ -64,6 +64,8 @@ export async function POST( request: Request ) {
 
     return Response.json( { file : name, url : `/api/captures/${name}` } );
   } catch ( err ) {
+    console.log( err )
+    
     return Response.json(
       { error : err instanceof Error ? err.message : "Compose failed" },
       { status : 500 },

@@ -1,5 +1,6 @@
 import "server-only";
 
+import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { readFile, writeFile, mkdir, rename, unlink } from "node:fs/promises";
 import path from "node:path";
@@ -627,7 +628,14 @@ async function resolveFrameImagePath( frameKey: string ): Promise<string> {
   const frame = await getFrame( frameKey )
   if ( !frame ) throw new Error( `Unknown frame: ${frameKey}` )
 
-  const cachedPath = path.join( CAPTURES_DIR, `.frame-${frameKey}.png` )
+  const artworkKey = createHash( "sha1" )
+    .update( frame.image || frame.publicUrl )
+    .digest( "hex" )
+    .slice( 0, 12 )
+  const cachedPath = path.join(
+    CAPTURES_DIR,
+    `.frame-${frameKey}-${artworkKey}.png`,
+  )
 
   // Return cached pre-keyed overlay if it already exists
   try {
@@ -644,7 +652,13 @@ async function resolveFrameImagePath( frameKey: string ): Promise<string> {
     imageBuffer = await readFile( frame.image )
   } else {
     // Fetch from external URL
-    const res = await externalFetch( frame.publicUrl );
+    let res: Response
+    try {
+      res = await externalFetch( frame.publicUrl );
+    } catch ( err ) {
+      const reason = err instanceof Error ? `: ${err.message}` : ""
+      throw new Error( `Frame artwork fetch failed (${frame.publicUrl})${reason}` )
+    }
     if ( !res.ok ) throw new Error( `Failed to fetch frame image: ${res.statusText}` );
     imageBuffer = Buffer.from( await res.arrayBuffer() );
   }

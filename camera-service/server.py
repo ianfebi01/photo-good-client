@@ -10,15 +10,15 @@ the Next.js app:
     POST /capture  -> full-resolution still, JPEG bytes (gphoto mode only)
     GET  /mode     -> the active source + the modes this host supports
     POST /mode     -> switch source: {"mode": "gphoto" | "uvc", "device": str}
-    GET  /devices  -> capture devices ffmpeg can see (UVC mode)
+    GET  /devices  -> capture devices PyAV can see (UVC mode)
 
 Two modes, one live view:
 
 - `gphoto` — a PTP camera via libgphoto2. Because we hold one camera object
   in-process we can call camera.exit()/init() to re-bind after an
   unplug/replug, so the preview self-heals WITHOUT restarting anything.
-- `uvc` — a USB/HDMI video capture device read by ffmpeg (avfoundation on
-  macOS, v4l2 on Linux). A capture device has no still path at all, so there a
+- `uvc` — a USB/HDMI video capture device read in-process by PyAV
+  (`avfoundation` on macOS, `v4l2` on Linux). A capture device has no still path at all, so there a
   shot is *only ever* a screenshot of the newest video frame.
 
 The live view is the single source of truth in both modes. One pump thread is
@@ -31,17 +31,22 @@ also keeps a PTP body from dropping into its own auto-power-off between shots.
 """
 
 import errno
+import io
 import json
 import os
 import platform
 import re
-import shlex
 import subprocess
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+try:
+    import av
+except ImportError:
+    av = None
 import gphoto2 as gp
+from PIL import Image
 
 
 def load_camera_env( root: str ) -> dict:
@@ -126,7 +131,6 @@ MODES = (MODE_GPHOTO, MODE_UVC)
 # Cadence/size asked of the capture device. The device's own rate is the ceiling
 # (most HDMI dongles do 1080p30 / 4K30), so this only ever drops frames.
 UVC_FPS = 25
-UVC_QUALITY = 4  # ffmpeg -q:v, 2 (best) .. 31 (worst)
 # The booth's capture device on macOS. Use its label instead of index 1 because
 # AVFoundation reassigns indices when cameras are connected or removed.
 MACOS_UVC_DEVICE = "USB Video"
@@ -139,12 +143,14 @@ MACOS_UVC_DEVICE = "USB Video"
 # of any one consumer, so they are removed here — otherwise every preview frame,
 # every shot and every recorded clip carries them.
 #
-# cropdetect reads *brightness*, so it cannot be trusted blindly: a dark scene
-# can look like a border. A detection is therefore only accepted when the probe
-# frames agree, the trim is symmetric (how a scaler pads) and it is small. Set
-# CAMERA_UVC_CROP to "W:H:X:Y" to pin one by hand, or "none" to disable this.
+# The in-process detector reads *brightness*, so it cannot be trusted blindly:
+# a dark scene can look like a border. A detection is therefore only accepted
+# when the probe frames agree, the trim is symmetric (how a scaler pads) and it
+# is small. Set CAMERA_UVC_CROP to "W:H:X:Y" to pin one by hand, or "none" to
+# disable this.
+# Frames sampled before enabling an automatically-detected crop. Requiring all
+# samples to agree avoids cutting into a dark scene that merely resembles a bar.
 UVC_CROP_PROBE_FRAMES = 8
-UVC_CROP_PROBE_FPS = 4
 # Only *near*-black counts as a bar: the pad a scaler adds is true black, while
 # dark picture has some level in it. A permissive limit is how a shadowed wall
 # gets mistaken for a border.
@@ -158,8 +164,6 @@ UVC_CROP_ASPECTS = (
     1.0, 1.25, 1.3333, 1.5, 1.6, 1.6667, 1.7778, 1.85, 1.9, 2.0, 2.35, 2.39,
 )
 UVC_CROP_ASPECT_TOLERANCE = 0.02
-UVC_CROP_PATTERN = re.compile( r"crop=(\d{2,5}):(\d{2,5}):(\d{1,5}):(\d{1,5})" )
-UVC_INPUT_SIZE = re.compile( r"Stream #0:0: Video: .*?(\d{2,5})x(\d{2,5})" )
 # A requested capture mode, e.g. "1280x720" (see CAMERA_UVC_SIZE).
 UVC_SIZE_PATTERN = re.compile( r"^\d{2,5}x\d{2,5}$" )
 
@@ -168,162 +172,81 @@ STATE_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), ".camera-state.json"
 )
 
-# ffmpeg needs a moment to open the device; a source that has produced nothing
+# A device needs a moment to open; a source that has produced nothing
 # yet is "warming up", not "broken".
 UVC_START_GRACE = 10.0
 # After this long with no frames the source is reported as disconnected (and
 # the app falls back to its mock camera).
 UVC_STALE_AFTER = 3.0
 # How long /snapshot waits for the very first frame after a switch to UVC — a
-# guest can tap the shutter before ffmpeg has delivered anything.
+# guest can tap the shutter before PyAV has delivered anything.
 SNAPSHOT_WAIT = 2.0
 
 
-def looks_like_text( data: bytes ) -> bool:
-    """True when a non-JPEG chunk reads as ffmpeg's own output rather than image
-    bytes — used only to decide whether a log line is worth printing."""
-    if not data:
-        return False
-    sample = data[:400]
-    printable = sum(
-        1 for byte in sample if 32 <= byte < 127 or byte in (9, 10, 13)
-    )
-    return printable / len( sample ) > 0.9
+def pyav_available() -> bool:
+    """True when this installation can open UVC sources in-process."""
+    return av is not None
 
 
-def iter_jpeg_frames( buf: bytes ):
-    """Pull every complete JPEG out of an MJPEG stream buffer.
-
-    Returns `(frames, tail)`: `tail` is the unfinished trailing frame, which the
-    caller keeps and prepends to the next chunk. 0xFF is byte-stuffed (0xFF 0x00)
-    inside entropy-coded data, so a bare 0xFFD9 can only be a real EOI marker —
-    which is what makes this safe without a full JPEG parser.
-
-    Bytes that are not part of a frame (ffmpeg diagnostics, which we merge into
-    stdout) are dropped, and if a buffer holds no start marker at all it is
-    discarded rather than accumulated.
-    """
-    frames = []
-    pos = 0
-    while True:
-        start = buf.find(b"\xff\xd8", pos)
-        if start < 0:
-            return frames, b""
-        end = buf.find(b"\xff\xd9", start + 2)
-        if end < 0:
-            return frames, buf[start:]
-        frames.append(buf[start : end + 2])
-        pos = end + 2
-
-
-def ffmpeg_available() -> bool:
-    """True when the UVC reader can run on this host."""
-    try:
-        subprocess.run(
-            ["ffmpeg", "-version"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=5,
-            check=True,
-        )
-        return True
-    except Exception:  # noqa: BLE001 — missing binary, timeout, anything
-        return False
-
-
-def uvc_requested_size() -> list:
-    """`-video_size WxH` for the mode CAMERA_UVC_SIZE asks for, or [] for the
-    device default.
+def uvc_requested_size() -> str | None:
+    """The `video_size` PyAV option, or None to use the device default.
 
     A capture device exposes a fixed menu of modes, so this is a request rather
-    than a guarantee: ffmpeg picks the closest thing it can, and /status reports
+    than a guarantee: the device picks the closest thing it can, and /status reports
     the size that actually arrived. Ignored with a note when malformed, because a
     bad value here would otherwise surface as an unexplained missing preview.
     """
     size = os.environ.get("CAMERA_UVC_SIZE", "").strip()
     if not size:
-        return []
+        return None
     if not UVC_SIZE_PATTERN.match( size ):
         print(
             f"[camera-service] ignoring CAMERA_UVC_SIZE={size!r} "
             "(expected WxH, e.g. 1280x720)",
             flush=True,
         )
-        return []
+        return None
 
-    return ["-video_size", size]
+    return size
 
 
-def uvc_input_args( device: str ) -> list:
-    """ffmpeg *input specification* (input options plus `-i <source>`).
+def uvc_crop_tuple( crop: str ):
+    """Explicit crop as (width, height, left, top), or None."""
+    if not crop:
+        return None
+    parts = crop.split( ":" )
+    if len( parts ) != 4 or not all( part.isdigit() for part in parts ):
+        raise ValueError( f"invalid CAMERA_UVC_CROP={crop!r}" )
 
-    CAMERA_UVC_INPUT_ARGS replaces this wholesale — the escape hatch for devices
-    ffmpeg needs spelled out (a specific pixel format or video_size, a second
-    capture device, a network source) and how this reader is exercised without
-    hardware. CAMERA_UVC_SIZE is the plain way to ask for a capture mode.
-    """
-    override = os.environ.get("CAMERA_UVC_INPUT_ARGS")
-    if override:
-        return shlex.split( override )
+    return tuple( int( part ) for part in parts )
 
+
+def open_uvc_container( device: str ):
+    """Open the configured UVC device through PyAV, without a child process."""
+    if av is None:
+        raise RuntimeError( "PyAV is not installed; run pnpm camera:setup" )
+    options = { "framerate" : "30" }
     size = uvc_requested_size()
-
+    if size:
+        options["video_size"] = size
     if IS_DARWIN:
-        # AVFoundation addresses devices by index ("0") or by name, and defaults
-        # to yuv420p — which *no* UVC capture dongle accepts (they offer
-        # uyvy422/yuyv422/nv12/0rgb/bgr0), so the pixel format has to be asked
-        # for explicitly or ffmpeg never opens the device.
-        return [
-            "-f",
-            "avfoundation",
-            "-framerate",
-            "30",
-            "-pixel_format",
-            "uyvy422",
-            *size,
-            "-i",
-            device or "0",
-        ]
+        options["pixel_format"] = "uyvy422"
+        return av.open( device or "0", format="avfoundation", options=options )
 
-    return ["-f", "v4l2", *size, "-i", device or "/dev/video0"]
+    return av.open( device or "/dev/video0", format="v4l2", options=options )
 
 
-def build_uvc_command( device: str, crop: str = "" ) -> list:
-    """ffmpeg command that turns the capture device into an MJPEG stream.
+def encode_uvc_image( image: Image.Image, crop: str = "" ) -> bytes:
+    """Encode one Pillow image as the JPEG used by the HTTP stream."""
+    crop_box = uvc_crop_tuple( crop )
+    if crop_box:
+        width, height, left, top = crop_box
+        image = image.crop( ( left, top, left + width, top + height ) )
 
-    `crop` ("W:H:X:Y") is applied first, so the bars never reach a consumer and
-    the size /status reports is the size the picture really is.
+    output = io.BytesIO()
+    image.save( output, format="JPEG", quality=92, optimize=True )
 
-    stderr is merged into stdout on purpose: a failing device then cannot
-    deadlock on a full stderr pipe, and `iter_jpeg_frames` ignores the text.
-    """
-    # CAMERA_UVC_FILTER appends to the rate filter — e.g. "transpose=1" for a
-    # capture stick that presents its HDMI input rotated.
-    extra = os.environ.get("CAMERA_UVC_FILTER", "").strip()
-
-    filters = []
-    if crop:
-        filters.append( f"crop={crop}" )
-    filters.append( f"fps={UVC_FPS}" )
-    if extra:
-        filters.append( extra )
-
-    return [
-        "ffmpeg",
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-nostdin",
-        *uvc_input_args( device ),
-        "-an",
-        "-vf",
-        ",".join( filters ),
-        "-f",
-        "mjpeg",
-        "-q:v",
-        str( UVC_QUALITY ),
-        "-",
-    ]
+    return output.getvalue()
 
 
 def pick_crop( size, crops ) -> str:
@@ -344,7 +267,8 @@ def pick_crop( size, crops ) -> str:
     if votes != len( crops ) or votes < 3:
         return ""
 
-    w, h, x, y = ( int( part ) for part in crop )
+    parts = crop.split( ":" ) if isinstance( crop, str ) else crop
+    w, h, x, y = ( int( part ) for part in parts )
     if ( w, h, x, y ) == ( width, height, 0, 0 ):
         return ""
 
@@ -387,103 +311,78 @@ def pick_crop( size, crops ) -> str:
     return f"{w}:{h}:{x}:{y}"
 
 
-def detect_uvc_crop( device: str ) -> str:
-    """Probe the capture device once for the black bars it bakes in.
+def _edge_trim( pixels, width: int, height: int, side: str ) -> int:
+    """Black border thickness, measured against a compact greyscale image."""
+    if side in ( "left", "right" ):
+        positions = range( width ) if side == "left" else range( width - 1, -1, -1 )
+        samples = max( 1, height // 48 )
+        for distance, x in enumerate( positions ):
+            bright = sum(
+                pixels[ y * width + x ] > UVC_CROP_BLACK
+                for y in range( 0, height, samples )
+            )
+            if bright:
+                return distance
+    else:
+        positions = range( height ) if side == "top" else range( height - 1, -1, -1 )
+        samples = max( 1, width // 48 )
+        for distance, y in enumerate( positions ):
+            bright = sum(
+                pixels[ y * width + x ] > UVC_CROP_BLACK
+                for x in range( 0, width, samples )
+            )
+            if bright:
+                return distance
+    return 0
 
-    Runs the same input through cropdetect and returns the crop the frames
-    agree on, or "" for "no bars I am sure about". Takes about a second, and
-    the reader only starts afterwards — the booth treats a source as warming up
-    until frames arrive, so this is invisible to the guest.
-    """
-    cmd = [
-        "ffmpeg",
-        "-hide_banner",
-        "-loglevel",
-        "info",
-        "-nostdin",
-        *uvc_input_args( device ),
-        "-an",
-        "-vf",
-        f"fps={UVC_CROP_PROBE_FPS},"
-        f"cropdetect=limit={UVC_CROP_BLACK}:round=2:reset=0",
-        "-frames:v",
-        str( UVC_CROP_PROBE_FRAMES ),
-        "-f",
-        "null",
-        "-",
-    ]
-    try:
-        proc = subprocess.run(
-            cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            timeout=20,
-        )
-    except Exception:  # noqa: BLE001 — a failed probe is not an error
+
+def crop_candidate( image: Image.Image ) -> str:
+    """A conservative black-border crop inferred from one raw PyAV frame."""
+    source_width, source_height = image.size
+    # Scan a small copy: the source is high-res but a 1–2 px difference in the
+    # probe is immaterial, and quantising below removes that jitter entirely.
+    scale = min( 1.0, 320 / max( source_width, source_height ) )
+    width = max( 1, round( source_width * scale ) )
+    height = max( 1, round( source_height * scale ) )
+    probe = image.convert( "L" ).resize( ( width, height ), Image.Resampling.BOX )
+    pixels = list( probe.getdata() )
+
+    left = _edge_trim( pixels, width, height, "left" )
+    right = _edge_trim( pixels, width, height, "right" )
+    top = _edge_trim( pixels, width, height, "top" )
+    bottom = _edge_trim( pixels, width, height, "bottom" )
+
+    def unscale( value: int ) -> int:
+        # Crops should be even for the media formats the rest of the app uses.
+        return 2 * round( ( value / scale ) / 2 )
+
+    left, right, top, bottom = ( unscale( value ) for value in ( left, right, top, bottom ) )
+    cropped_width = source_width - left - right
+    cropped_height = source_height - top - bottom
+    if cropped_width <= 0 or cropped_height <= 0:
         return ""
-
-    text = proc.stderr.decode("utf-8", "replace")
-    size_match = UVC_INPUT_SIZE.search( text )
-    size = (
-        ( int( size_match.group(1) ), int( size_match.group(2) ) )
-        if size_match
-        else None
-    )
-
-    return pick_crop( size, UVC_CROP_PATTERN.findall( text ) )
-
-
-def uvc_crop_for( device: str ) -> str:
-    """Explicit crop when one is configured, otherwise the detected one."""
-    explicit = os.environ.get("CAMERA_UVC_CROP")
-    if explicit is not None:
-        value = explicit.strip()
-        if value.lower() in ("none", "off", "0", ""):
-            return ""
-
-        return value
-
-    return detect_uvc_crop( device )
+    return f"{cropped_width}:{cropped_height}:{left}:{top}"
 
 
 def list_video_devices() -> list:
     """Capture devices this host can offer, best-effort: `[{id, label}]`.
 
-    macOS: ffmpeg's AVFoundation list, which is both the discovery and the
-    addressing ("0", "1", …). Linux: /dev/video*, named via v4l2-ctl when it is
-    installed. Never raises — an empty list just means "let the operator type
-    one in".
+    macOS: PyAV's AVFoundation device enumeration, whose identifiers are also
+    what `av.open()` accepts. Linux: `/dev/video*`. Never raises — an empty list
+    just means "let the operator type one in".
     """
     try:
         if IS_DARWIN:
-            proc = subprocess.run(
-                [
-                    "ffmpeg",
-                    "-hide_banner",
-                    "-f",
-                    "avfoundation",
-                    "-list_devices",
-                    "true",
-                    "-i",
-                    "",
-                ],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                timeout=15,
-            )
-            devices, in_video = [], False
-            for raw in proc.stderr.decode("utf-8", "replace").splitlines():
-                line = raw.split("] ", 1)[-1].strip()
-                if "AVFoundation video devices" in line:
-                    in_video = True
-                    continue
-                if "AVFoundation audio devices" in line:
-                    break
-                if not in_video or not line.startswith("["):
-                    continue
-                index, _, label = line[1:].partition("]")
-                devices.append({"id": index.strip(), "label": label.strip()})
-            return devices
+            if av is None:
+                return []
+            return [
+                {
+                    "id": entry.name,
+                    "label": entry.description or entry.name,
+                }
+                for entry in av.enumerate_input_devices( "avfoundation" )
+                if "video" in entry.media_types
+            ]
 
         import glob
 
@@ -566,9 +465,8 @@ class CameraManager:
         self._frame_at = 0.0
         self._frame_size = None
         self._fps = 0.0
-        # Rate is measured over a window rather than between two frames: ffmpeg
-        # hands us several frames per read, so consecutive publishes are
-        # near-simultaneous and a per-pair delta would report thousands of fps.
+        # Rate is measured over a window rather than between two frames so a
+        # short burst after a device reconnect cannot report an implausible fps.
         self._rate_at = time.monotonic()
         self._rate_frames = 0
         self._frame_cv = threading.Condition()
@@ -615,7 +513,7 @@ class CameraManager:
         """Switch the reader. Raises ValueError for an unknown mode.
 
         The running reader is not killed from here — it notices the generation
-        bump and tears down its own ffmpeg/camera handle between frames, so the
+        bump and tears down its own PyAV/camera handle between frames, so the
         device is never released while it is mid-read.
         """
         if mode not in MODES:
@@ -663,7 +561,7 @@ class CameraManager:
             "mode": mode,
             "device": device or None,
             "modes": list( MODES ),
-            "ffmpeg": ffmpeg_available(),
+            "pyav": pyav_available(),
         }
 
     def _resolve_device(self, device: str) -> str:
@@ -677,9 +575,6 @@ class CameraManager:
         index. A device requested right now (env var, or the booth's picker
         reading a fresh list) is used as given.
         """
-        if os.environ.get("CAMERA_UVC_INPUT_ARGS"):
-            return device
-
         devices = list_video_devices()
         if not devices:
             return device
@@ -826,7 +721,7 @@ class CameraManager:
         Connected means "frames are arriving": a capture device has no query
         protocol, so the arrival of frames *is* the health check. A source that
         was switched to recently is reported as connected (with `warming: true`)
-        so a cold start does not flash mock mode in the booth before ffmpeg has
+        so a cold start does not flash mock mode in the booth before PyAV has
         delivered its first frame.
         """
         with self._mode_cv:
@@ -946,65 +841,69 @@ class CameraManager:
             self._reset()
 
     def _pump_uvc(self, device: str, gen: int):
-        """Read MJPEG off ffmpeg's stdout — the only reader of the device.
+        """Read frames through PyAV — the only reader of the device.
 
         Everything that wants a frame (/preview, /snapshot, the countdown
         recorder) reads this one buffer, exactly as with the PTP pump, so a
         shot costs the device nothing and can never stall the live view.
         """
         device = self._resolve_device( device )
-        # Bars are measured before the reader starts, so nothing ever sees them.
-        crop = uvc_crop_for( device )
-        cmd = build_uvc_command( device, crop )
+        configured_crop = os.environ.get("CAMERA_UVC_CROP")
+        crop = configured_crop.strip() if configured_crop is not None else None
+        if crop is not None and crop.lower() in ( "none", "off", "0", "" ):
+            crop = ""
+        legacy_filter = os.environ.get("CAMERA_UVC_FILTER", "").strip()
+        if legacy_filter:
+            print(
+                f"[camera-service] ignoring CAMERA_UVC_FILTER={legacy_filter!r}; "
+                "PyAV does not use command-line filter strings",
+                flush=True,
+            )
         print(
-            f"[camera-service] uvc crop: {crop or 'none'}",
+            "[camera-service] uvc crop: "
+            f"{crop if crop is not None else 'auto'}",
             flush=True,
         )
-        print(f"[camera-service] uvc reading: {' '.join( cmd )}", flush=True)
-
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            stdin=subprocess.DEVNULL,
-            bufsize=0,
+        print(
+            f"[camera-service] uvc reading with PyAV: {device or 'default'}",
+            flush=True,
         )
 
-        tail = b""
-        announced = False
+        container = open_uvc_container( device )
+        stream = container.streams.video[0]
+        stream.thread_type = "AUTO"
         try:
-            while self._is_current( gen ):
-                chunk = proc.stdout.read( 65536 )
-                if not chunk:
-                    break  # ffmpeg gave up: device busy, unplugged, bad args
-
-                frames, tail = iter_jpeg_frames( tail + chunk )
-                # Between frames (nothing buffered) anything that is not a JPEG
-                # start marker is ffmpeg's own diagnostics, merged into stdout —
-                # the only clue when a device cannot be opened at all.
-                if not frames and not tail and not announced:
-                    text = chunk.decode("utf-8", "replace").strip()
-                    if text and looks_like_text( chunk ):
-                        announced = True
-                        print(f"[camera-service] uvc: {text[:400]}", flush=True)
-
-                for frame in frames:
-                    self._publish( frame, time.monotonic() )
+            last_frame_at = 0.0
+            crop_candidates = []
+            for video_frame in container.decode( stream ):
+                if not self._is_current( gen ):
+                    break
+                now = time.monotonic()
+                if now - last_frame_at < PREVIEW_MIN_INTERVAL:
+                    continue
+                image = video_frame.to_image()
+                if crop is None:
+                    candidate = crop_candidate( image )
+                    if candidate:
+                        crop_candidates.append( candidate )
+                    if len( crop_candidates ) < UVC_CROP_PROBE_FRAMES:
+                        # Do not leak pre-crop frames to the preview: a clip and
+                        # a still must agree on the same picture boundaries.
+                        last_frame_at = now
+                        continue
+                    crop = pick_crop( image.size, crop_candidates )
+                    print(
+                        f"[camera-service] uvc auto-crop: {crop or 'none'}",
+                        flush=True,
+                    )
+                frame = encode_uvc_image( image, crop )
+                self._publish( frame, now )
+                last_frame_at = now
         finally:
             try:
-                proc.terminate()
-                code = proc.wait( timeout=3 )
-            except Exception:  # noqa: BLE001
-                try:
-                    proc.kill()
-                except Exception:  # noqa: BLE001
-                    pass
-                code = None
-            if code not in (0, -15, None) and self._is_current( gen ):
-                print(
-                    f"[camera-service] ffmpeg (uvc) exited with {code}",
-                    flush=True,
-                )
+                container.close()
+            except Exception:
+                pass
 
     def next_frame( self, after_seq: int, timeout: float = 2.0 ):
         """Block until a frame newer than `after_seq`, then return the newest.
@@ -1205,7 +1104,7 @@ class Handler(BaseHTTPRequestHandler):
         """Capture devices this host can offer (empty list is a valid answer)."""
         self._send_json(
             {
-                "ffmpeg": ffmpeg_available(),
+                "pyav": pyav_available(),
                 "devices": list_video_devices(),
             }
         )

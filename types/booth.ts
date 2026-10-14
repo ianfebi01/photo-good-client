@@ -60,7 +60,7 @@ export type BoothSettingsResponse = {
  *
  * - `gphoto` — a PTP camera owned by the camera service (libgphoto2). Its live
  *   view is a movie preview, so a shot is a screenshot of the newest frame.
- * - `uvc` — a USB/HDMI video capture device, read as live video by ffmpeg. A
+ * - `uvc` — a USB/HDMI video capture device, read in-process with PyAV. A
  *   capture device has no still path at all, so a shot there is *only ever* a
  *   screenshot of the video.
  */
@@ -79,8 +79,8 @@ export type CameraModeState = {
   /** Device `uvc` mode is reading, when one is known. */
   device : string | null
   modes : CameraMode[]
-  /** False when the camera host has no ffmpeg — UVC mode cannot run there. */
-  ffmpeg : boolean
+  /** False when the camera host has no PyAV — UVC mode cannot run there. */
+  pyav : boolean
   devices : CameraDevice[]
 }
 

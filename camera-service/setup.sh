@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Create the camera-service virtualenv and install python-gphoto2.
+# Create the camera-service virtualenv and install the camera bindings.
 # Run once: `pnpm camera:setup` (or `bash camera-service/setup.sh`).
 set -euo pipefail
 
@@ -12,12 +12,7 @@ if [ ! -d .venv ]; then
   "$PYTHON" -m venv .venv
 fi
 
-./.venv/bin/pip install --quiet --upgrade pip
-./.venv/bin/pip install -r requirements.txt
+./.venv/bin/python3 -m pip install --quiet --upgrade pip
+./.venv/bin/python3 -m pip install -r requirements.txt
 
-if ! command -v ffmpeg >/dev/null 2>&1; then
-  echo "[camera-service] note: ffmpeg not found — UVC mode (USB/HDMI capture"
-  echo "[camera-service]       device) needs it. Install with: brew install ffmpeg"
-fi
-
-echo "[camera-service] ready. Start it with: pnpm camera"
+echo "[camera-service] ready. PyAV is bundled in the virtualenv; start with: pnpm camera"

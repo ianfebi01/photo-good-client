@@ -35,13 +35,13 @@ export type SidecarModeState = {
   mode: CameraMode;
   device: string | null;
   modes?: CameraMode[];
-  /** False when the host has no ffmpeg, so UVC mode cannot run. */
-  ffmpeg?: boolean;
+  /** False when the host has no PyAV, so UVC mode cannot run. */
+  pyav?: boolean;
 };
 
-/** GET /devices — capture devices ffmpeg can see. */
+/** GET /devices — capture devices PyAV can see. */
 export type SidecarDeviceList = {
-  ffmpeg: boolean;
+  pyav: boolean;
   devices: CameraDevice[];
 };
 

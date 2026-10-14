@@ -8,8 +8,9 @@ over HTTP. It reads **either** of two sources:
   Because it holds one camera object in-process, it can call `camera.exit()` /
   `init()` to **rebind to a reconnected camera without restarting anything** —
   so unplug/replug recovers on its own.
-- **`uvc`** (default) — a USB/HDMI video capture device, read as live video by `ffmpeg`
-  (`avfoundation` on macOS, `v4l2` on Linux). Needs `ffmpeg` on the camera host.
+- **`uvc`** (default) — a USB/HDMI video capture device, read in-process by
+  [PyAV](https://pyav.org/) (`avfoundation` on macOS, `v4l2` on Linux). The
+  sidecar does not need an external media executable on the camera host.
 
 The booth has a **camera source toggle** on the capture step that switches
 between them; the choice is remembered in `.camera-state.json` next to this
@@ -39,7 +40,7 @@ The EOS M6 reports `liveviewsize = Small` (its only choice) and delivers
 property of the body's PTP live view, not of this code. An HDMI→USB capture
 device measured **1920×1080 @ ~22 fps**, which is the reason to use `uvc` mode:
 it raises the preview *and* the countdown clip quality at the same time (the
-clip is recorded by ffmpeg reading this `/preview` stream). `POST /capture`
+clip is recorded by the app reading this `/preview` stream). `POST /capture`
 still returns a full-resolution still (3984×2656 on an M6) in `gphoto` mode.
 
 ## Endpoints
@@ -50,9 +51,9 @@ still returns a full-resolution still (3984×2656 on an M6) in `gphoto` mode.
 | GET    | `/preview`  | `multipart/x-mixed-replace` MJPEG live view                |
 | GET    | `/snapshot` | newest live-view frame as one `image/jpeg` (a screenshot)  |
 | POST   | `/capture`  | full-resolution `image/jpeg` bytes (`gphoto`); a screenshot in `uvc` |
-| GET    | `/mode`     | `{ "mode", "device", "modes", "ffmpeg" }`                  |
+| GET    | `/mode`     | `{ "mode", "device", "modes", "pyav" }`                    |
 | POST   | `/mode`     | switch source — body `{ "mode": "gphoto"\|"uvc", "device": str? }` |
-| GET    | `/devices`  | `{ "ffmpeg": bool, "devices": [{ "id", "label" }] }`     |
+| GET    | `/devices`  | `{ "pyav": bool, "devices": [{ "id", "label" }] }`       |
 
 Both `POST /mode` and `/status` are used by the app's `/api/camera/mode` route,
 which is what the booth toggle calls.
@@ -98,24 +99,18 @@ UVC mode:
 - `CAMERA_UVC_SIZE` — the capture mode to ask the device for, as `WxH`
   (`1920x1080`, `1280x720`, `640x480`). **This is the resolution setting.**
   Unset, the device's own default is used (1920×1080 on most sticks). A device
-  exposes a fixed menu of modes, so it is a *request*: ffmpeg takes the closest
+  exposes a fixed menu of modes, so it is a *request*: the device takes the closest
   it can and `/status` reports the size that actually arrived — verified on this
   booth, `1280x720` → 1280×720 and `640x480` → 640×480. Nothing downstream
   rescales the picture, since upscaling adds no detail; asking the device is the
   only real way to change it. A malformed value is ignored with a note in the log.
-- `CAMERA_UVC_INPUT_ARGS` — replaces the whole ffmpeg input specification
-  (options **and** `-i <source>`). The escape hatch for a capture device ffmpeg
-  needs spelled out: a specific `-video_size`, `-framerate` or `-pixel_format`,
-  a second capture device, or a non-USB source such as RTSP. Also how the UVC
-  reader is exercised without hardware, e.g.
-  `CAMERA_UVC_INPUT_ARGS="-f lavfi -i testsrc2=size=1280x720:rate=30"`.
 - `CAMERA_UVC_CROP` — the black bars a capture device bakes into its frames.
-  Defaults to **auto-detect**: on each start the service probes with
-  `cropdetect` (~3 s, before any frame is served) and crops only when the probe
+  Defaults to **auto-detect**: after the first eight PyAV frames the service
+  crops only when the probe
   frames **all** agree on the same crop, the bars sit on exactly **one** axis,
   are symmetric *on that axis*, trim under a fifth of a side, and leave a shape
   a signal can really be (3:2, 4:3, 16:9, …). Anything else means "not a bar" and
-  the frame is left alone — `cropdetect` reads *brightness*, so a dark scene,
+  the frame is left alone — the detector reads *brightness*, so a dark scene,
   a shadowed wall or the black column of SMPTE bars all look like a border, and a
   wrong crop silently eats real picture while refusing one only leaves bars.
   Set it to `W:H:X:Y` to pin one by hand (`1620:1080:150:0` for a 3:2 camera on
@@ -123,8 +118,6 @@ UVC mode:
   leave the frames untouched. A pinned crop **must match the size in use**: the
   bars of a 1920×1080 frame are not the bars of a 1280×720 one, so if you set
   `CAMERA_UVC_SIZE`, leave this on auto-detect.
-- `CAMERA_UVC_FILTER` — extra ffmpeg video filters appended after the rate cap,
-  e.g. `transpose=1` for a capture stick that presents its HDMI input rotated.
 
 ### Why frames can arrive with black bars
 
@@ -136,19 +129,15 @@ at the source: otherwise the guest sees them in the preview, and every shot, the
 countdown clips and the GIF carry them. `/status` reports the size **after** the
 crop (1620×1080 here), which is the real shape of the picture.
 
-> **macOS pixel format.** AVFoundation defaults to `yuv420p`, which UVC capture
-> dongles reject (`Selected pixel format (yuv420p) is not supported by the input
-> device`). The service therefore asks for `uyvy422` explicitly — without it
-> ffmpeg never opens the device. If yours needs something else, override
-> `CAMERA_UVC_INPUT_ARGS`.
+> **macOS pixel format.** UVC capture dongles often reject AVFoundation's
+> default `yuv420p` format. The service asks PyAV for `uyvy422` explicitly.
 >
 > **Portrait output.** Some capture sticks negotiate a portrait mode on reopen
 > (`/status` then reports `1080×1920` instead of `1920×1080`), which the booth's
 > landscape preview crops. Pin the mode you want with
-> `CAMERA_UVC_INPUT_ARGS="-f avfoundation -framerate 30 -pixel_format uyvy422
-> -video_size 1920x1080 -i 0"`, or rotate with `CAMERA_UVC_FILTER=transpose=1`.
-> Either way `/status` reports the size actually being received — check it after
-> switching, because the booth composes into fixed slots.
+> `CAMERA_UVC_SIZE=1920x1080`. Either way `/status` reports the size actually
+> being received — check it after switching, because the booth composes into
+> fixed slots. Rotate the camera signal at the device when possible.
 
 ## Picking a device
 

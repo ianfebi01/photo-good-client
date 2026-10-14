@@ -34,7 +34,7 @@ export async function ensureCapturesDir() {
 
 /**
  * Camera status comes from the Python sidecar (camera-service/), which owns the
- * camera — a PTP body via libgphoto2, or a USB video capture device via ffmpeg
+ * camera — a PTP body via libgphoto2, or a USB video capture device via PyAV
  * — and recovers across USB reconnects in-process. When the sidecar is
  * unreachable — or PHOTOBOOTH_MOCK=1 — we fall back to the simulated camera so
  * the app keeps working without hardware.

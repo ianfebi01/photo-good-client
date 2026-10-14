@@ -82,7 +82,7 @@
       {
         "from": "camera-service",
         "to": "camera-service",
-        "filter": ["**/*"]
+        "filter": ["**/*", ".venv/**/*"]
       },
       {
         "from": ".env",

@@ -44,7 +44,7 @@ async function readState(): Promise<CameraModeState | null> {
     mode    : isMode( mode.mode ) ? mode.mode : "uvc",
     device  : mode.device ?? null,
     modes   : mode.modes?.length ? mode.modes : MODES,
-    ffmpeg  : mode.ffmpeg ?? deviceList?.ffmpeg ?? false,
+    pyav    : mode.pyav ?? deviceList?.pyav ?? false,
     devices : deviceList?.devices ?? [],
   };
 }
@@ -109,7 +109,7 @@ export async function POST( request: Request ) {
       mode    : isMode( updated.mode ) ? updated.mode : mode,
       device  : updated.device ?? null,
       modes   : updated.modes?.length ? updated.modes : MODES,
-      ffmpeg  : updated.ffmpeg ?? false,
+      pyav    : updated.pyav ?? false,
       devices : [],
     },
   );

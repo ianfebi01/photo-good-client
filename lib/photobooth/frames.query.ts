@@ -165,7 +165,7 @@ function normalizeModeState(
     mode   : modeData.mode === 'gphoto' ? 'gphoto' : 'uvc',
     device : modeData.device ?? null,
     modes  : modes.length ? modes : [ 'gphoto', 'uvc' ],
-    ffmpeg : Boolean( modeData.ffmpeg ),
+    pyav   : Boolean( modeData.pyav ),
     devices,
   }
 }

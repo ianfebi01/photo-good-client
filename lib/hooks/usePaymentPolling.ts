@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from 'react'
 
+import { getPaymentStatus } from '@/lib/photobooth/payment.query'
+
 // ── Types ──────────────────────────────────────────────────────────
 
 export type PollResult =
@@ -31,11 +33,8 @@ export function usePaymentPolling( orderId: string | null ): PollResult {
 
     const poll = async () => {
       try {
-        const res = await fetch(
-          `/api/booth/payment/status?orderId=${orderId}`,
-        )
-        const data = await res.json()
-        if ( !alive || !res.ok ) return
+        const data = await getPaymentStatus( orderId )
+        if ( !alive ) return
 
         if ( data.transactionStatus === 'settlement' ) {
           setResult( { status : 'settlement' } )

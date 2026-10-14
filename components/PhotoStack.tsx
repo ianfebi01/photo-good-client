@@ -10,6 +10,8 @@ import { FRAMES_QUERY_KEY, getFrames } from '@/lib/photobooth/frames.query'
 
 import 'swiper/css'
 import 'swiper/css/effect-cards'
+import { isStandalone } from '@/lib/photobooth/boothApi'
+import { FrameImage } from '@/components/booth/FrameImage'
 
 const PAGE_SIZE = 10
 
@@ -37,11 +39,13 @@ export default function PhotoStack( { className }: { className?: string } ) {
     queryFn  : () => getFrames( { page : 1, limit : PAGE_SIZE } ),
   } )
 
-  const previewUrls = useMemo( () => {
+  // With a server, an empty catalog still shows its default frame; the
+  // standalone build can only draw frames it actually has.
+  const previews = useMemo( () => {
     const list = data?.frames
-    if ( !list || list.length === 0 ) return ['/api/frames/preview?key=summer-day']
+    if ( list && list.length > 0 ) return list.map( ( frame ) => ( { key : frame.key, frame } ) )
 
-    return list.map( ( f ) => `/api/frames/preview?key=${f.key}` )
+    return isStandalone() ? [] : [{ key : 'summer-day', frame : undefined }]
   }, [data] )
 
   // Force Swiper to recalculate after mount when dimensions are stable
@@ -64,7 +68,7 @@ export default function PhotoStack( { className }: { className?: string } ) {
 
   return (
     <div className={cn( 'p-6 relative flex items-center justify-center overflow-hidden', className )}>
-      {previewUrls.length > 0 && (
+      {previews.length > 0 && (
         <Swiper
           effect="cards"
           grabCursor
@@ -86,14 +90,14 @@ export default function PhotoStack( { className }: { className?: string } ) {
             slideShadows : false,
           }}
         >
-          {previewUrls.map( ( url, idx ) => (
+          {previews.map( ( { key, frame }, idx ) => (
             <SwiperSlide
               key={idx}
               className="rounded-sm overflow-visible"
             >
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={url}
+              <FrameImage
+                frame={frame}
+                frameKey={key}
                 alt={`photo frame ${idx + 1}`}
                 className="w-full h-full object-contain drop-shadow-xl"
                 loading={idx === 0 ? 'eager' : 'lazy'}

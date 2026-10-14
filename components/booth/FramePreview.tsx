@@ -4,6 +4,7 @@ import { cn } from '@/lib/utils'
 import type { ClientFrame } from '@/lib/photobooth/frames.client'
 import type { Shot } from '@/store/boothStore'
 import { getCSSFilter } from './filters'
+import { FrameImage } from './FrameImage'
 
 const CAPTURE_SOURCE_ASPECT = 3 / 2
 
@@ -61,9 +62,11 @@ export function FramePreview( {
             height      : '100%',
           }}
         >
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={`/api/frames/preview?key=${frame.key}&overlay=true&t=${cacheBuster}`}
+          <FrameImage
+            frame={frame}
+            frameKey={frame.key}
+            variant="overlay"
+            cacheBuster={cacheBuster}
             alt="Frame template"
             className="absolute inset-0 w-full h-full object-contain z-10 pointer-events-none"
           />

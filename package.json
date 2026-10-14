@@ -15,6 +15,11 @@
     "electron:dev": "pnpm build && pnpm electron:prepare && electron .",
     "electron:build": "pnpm build && pnpm electron:prepare && electron-builder --mac --dir",
     "electron:installer": "pnpm build && pnpm electron:prepare && electron-builder --mac dmg",
+    "build:android": "NEXT_PUBLIC_STANDALONE=1 next build && rm -rf out/captures out/frames",
+    "android:sync": "pnpm build:android && cap sync android",
+    "android:open": "cap open android",
+    "android:run": "pnpm android:sync && cap run android",
+    "android:build": "pnpm android:sync && cd android && ./gradlew assembleDebug",
     "lint": "eslint",
     "camera:setup": "bash camera-service/setup.sh",
     "camera": "camera-service/.venv/bin/python3 camera-service/server.py",
@@ -23,11 +28,14 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1062.0",
     "@base-ui/react": "^1.5.0",
+    "@capacitor/android": "8.5.3",
+    "@capacitor/core": "8.5.3",
     "@tanstack/react-query": "^5.5.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "gsap": "^3.15.0",
     "lucide-react": "^1.16.0",
+    "mediabunny": "1.61.0",
     "next": "16.2.6",
     "pg": "^8.20.0",
     "qrcode": "^1.5.4",
@@ -42,12 +50,14 @@
     "zustand": "^5.0.14"
   },
   "devDependencies": {
+    "@capacitor/cli": "8.5.3",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/pg": "^8.20.0",
     "@types/qrcode": "^1.5.6",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "electron": "^44.4.2",
     "electron-builder": "^26.15.3",
     "eslint": "^9",
     "eslint-config-next": "16.2.6",
@@ -55,8 +65,6 @@
     "tailwindcss": "^4",
     "tsx": "^4.22.4",
     "typescript": "^5",
-    "electron": "^44.4.2",
-    "electron-builder": "^26.15.3",
     "typescript-eslint": "^8.60.0"
   },
   "build": {
@@ -74,7 +82,9 @@
       "package.json"
     ],
     "mac": {
-      "target": ["dir"],
+      "target": [
+        "dir"
+      ],
       "category": "public.app-category.photography",
       "identity": null
     },
@@ -82,7 +92,10 @@
       {
         "from": "camera-service",
         "to": "camera-service",
-        "filter": ["**/*", ".venv/**/*"]
+        "filter": [
+          "**/*",
+          ".venv/**/*"
+        ]
       },
       {
         "from": ".env",

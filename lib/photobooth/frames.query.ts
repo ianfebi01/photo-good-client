@@ -1,6 +1,13 @@
 import type { ClientFrame } from './frames.client'
 import type { CameraDevice, CameraMode, CameraModeState } from '@/types/booth'
 import type { Status } from '@/store/boothStore'
+import { isStandalone } from './boothApi'
+import {
+  captureDeviceStill,
+  deviceCameraStatus,
+  recordDeviceClip,
+  usesDeviceCamera,
+} from './deviceCamera'
 
 export const FRAMES_QUERY_KEY = ['frames'] as const
 export const CAMERA_STATUS_QUERY_KEY = ['camera-status'] as const
@@ -29,7 +36,20 @@ async function parseJson<T>( response: Response, fallbackMessage: string ): Prom
   return data as T
 }
 
+/**
+ * The on-device backend, for the standalone (server-less) build. Loaded on
+ * demand so the server build never ships it, or the video encoder it pulls in.
+ */
+const local = () => import( './standalone' )
+
 export async function getFrames( { page, limit }: PageArg ): Promise<FramesResponse> {
+  if ( isStandalone() ) {
+    const all = await ( await local() ).getFramesLocal()
+    const start = ( page - 1 ) * limit
+
+    return { frames : all.slice( start, start + limit ), total : all.length }
+  }
+
   const response = await fetch( `/api/frames?page=${page}&limit=${limit}`, { cache : 'no-store' } )
 
   return parseJson<FramesResponse>( response, 'Failed to load frames' )
@@ -37,6 +57,12 @@ export async function getFrames( { page, limit }: PageArg ): Promise<FramesRespo
 
 /** Fetch all frames (unpaginated — for frame selector). */
 export async function getAllFrames(): Promise<FramesResponse> {
+  if ( isStandalone() ) {
+    const all = await ( await local() ).getFramesLocal()
+
+    return { frames : all, total : all.length }
+  }
+
   const response = await fetch( '/api/frames?page=1&limit=200', { cache : 'no-store' } )
   const data = await parseJson<FramesResponse>( response, 'Failed to load frames' )
 
@@ -70,6 +96,9 @@ function _explicitUrl(): string | null {
 }
 
 async function _discoverUrl(): Promise<string | null> {
+  // The device camera replaces the camera service entirely (see deviceCamera.ts).
+  if ( usesDeviceCamera() ) return null;
+
   const explicit = _explicitUrl();
   if ( explicit ) return explicit;
 
@@ -94,6 +123,7 @@ async function _discoverUrl(): Promise<string | null> {
 }
 
 function getCameraServiceUrl(): string | null {
+  if ( usesDeviceCamera() ) return null;
   if ( _cameraBase !== undefined ) return _cameraBase;
   
   // If no discovery is in-flight, return the explicit URL (or null) synchronously
@@ -123,6 +153,35 @@ export function getCameraPreviewUrl( streamKey: string ): string {
 }
 
 export async function getCameraStatus(): Promise<Status> {
+  if ( isStandalone() ) {
+    // The in-app USB driver (for capture devices Android does not hand to
+    // apps as a camera) — started here, since the booth polls this from load.
+    const usb = await import( './usbCamera' )
+    void usb.startUsbCamera()
+    const state = usb.getUsbCameraState()
+    if ( usb.activeUsbCameraBase() && state ) {
+      return {
+        connected : true,
+        mock      : false,
+        model     : state.model ?? 'USB capture',
+        gphoto2   : true,
+        mode      : 'uvc',
+        device    : state.model,
+      }
+    }
+  }
+
+  if ( usesDeviceCamera() ) {
+    const device = deviceCameraStatus();
+
+    return {
+      connected : device.connected,
+      mock      : false,
+      model     : device.connected ? device.model : device.error,
+      gphoto2   : true,
+    };
+  }
+
   // Ensure discovery runs before fetching status
   const base = await ensureCameraDiscovered();
 
@@ -252,6 +311,15 @@ export async function captureShot( {
   index: number;
   mirror?: boolean;
 } ): Promise<{ file: string; url: string }> {
+  if ( isStandalone() ) {
+    return ( await local() ).captureShotLocal( sessionId, index, mirror )
+  }
+
+  if ( usesDeviceCamera() ) {
+    // Cropped and mirrored on the device, so it uploads as-is.
+    return uploadShot( await captureDeviceStill( mirror ), sessionId, index );
+  }
+
   const base = await ensureCameraDiscovered();
 
   if ( base ) {
@@ -270,20 +338,8 @@ export async function captureShot( {
     }
 
     const blob = mirror ? await mirrorImageBlob( await captureRes.blob() ) : await captureRes.blob();
-    const form = new FormData();
-    form.append( "file", blob, `shot-${sessionId}-${index}.jpg` );
-    form.append( "sessionId", sessionId );
-    form.append( "index", String( index ) );
 
-    const uploadRes = await fetch( "/api/captures/upload", {
-      method : "POST",
-      body   : form,
-    } );
-
-    return parseJson<{ file: string; url: string }>(
-      uploadRes,
-      "Capture upload failed",
-    );
+    return uploadShot( blob, sessionId, index );
   }
 
   // Fallback: capture through the server API routes
@@ -294,6 +350,28 @@ export async function captureShot( {
   } );
 
   return parseJson( response, "Capture failed" );
+}
+
+/** Store a shot taken in the browser (camera service or device camera). */
+async function uploadShot(
+  blob: Blob,
+  sessionId: string,
+  index: number,
+): Promise<{ file: string; url: string }> {
+  const form = new FormData();
+  form.append( "file", blob, `shot-${sessionId}-${index}.jpg` );
+  form.append( "sessionId", sessionId );
+  form.append( "index", String( index ) );
+
+  const uploadRes = await fetch( "/api/captures/upload", {
+    method : "POST",
+    body   : form,
+  } );
+
+  return parseJson<{ file: string; url: string }>(
+    uploadRes,
+    "Capture upload failed",
+  );
 }
 
 async function mirrorImageBlob( blob: Blob ): Promise<Blob> {
@@ -328,6 +406,10 @@ export async function composeStrip( {
   files: string[]
   adjustments: Array<{ x: number; y: number; zoom: number; filter: string }>
 } ): Promise<{ url: string }> {
+  if ( isStandalone() ) {
+    return ( await local() ).composeLocal( sessionId, frame, files, adjustments )
+  }
+
   const response = await fetch( '/api/camera/compose', {
     method  : 'POST',
     headers : { 'Content-Type' : 'application/json' },
@@ -368,6 +450,16 @@ export async function generateSessionVideo( {
   frameKey?: string
   adjustments?: Array<{ x: number; y: number; zoom: number; filter: string }>
 } ): Promise<{ file: string; url: string } | null> {
+  if ( isStandalone() ) {
+    return ( await local() ).generateVideoLocal(
+      sessionId,
+      files,
+      countdownFiles ?? [],
+      frameKey,
+      adjustments,
+    )
+  }
+
   const response = await fetch( '/api/captures/video', {
     method  : 'POST',
     headers : { 'Content-Type' : 'application/json' },
@@ -393,6 +485,8 @@ export async function generateSessionLoopVideo( {
   sessionId: string
   files: string[]
 } ): Promise<{ file: string; url: string } | null> {
+  if ( isStandalone() ) return ( await local() ).generateLoopLocal( sessionId, files )
+
   const response = await fetch( '/api/captures/loop-video', {
     method  : 'POST',
     headers : { 'Content-Type' : 'application/json' },
@@ -409,6 +503,10 @@ export async function generateSessionLoopVideo( {
  * ffmpeg reads the live preview the booth is showing (`streamUrl`) and encodes
  * the countdown window straight to MP4/H.264 — no canvas, no MediaRecorder, and
  * no second encode generation in the browser.
+ *
+ * The device camera is the exception: its picture never leaves the WebView as a
+ * stream the server could read, so the device records the countdown with
+ * MediaRecorder and the server transcodes the upload to the same MP4/H.264.
  *
  * Returns null when the server can't record (no ffmpeg, or nothing usable came
  * off the stream): the capture still works, the result video just falls back to
@@ -427,6 +525,14 @@ export async function recordCountdownClip( {
   streamUrl: string
   mirror?: boolean
 } ): Promise<{ file: string; url: string } | null> {
+  if ( isStandalone() ) {
+    return ( await local() ).recordClipLocal( sessionId, index, durationSec, mirror )
+  }
+
+  if ( usesDeviceCamera() ) {
+    return uploadDeviceClip( { sessionId, index, durationSec, mirror } )
+  }
+
   const response = await fetch( '/api/captures/countdown', {
     method  : 'POST',
     headers : { 'Content-Type' : 'application/json' },
@@ -436,6 +542,36 @@ export async function recordCountdownClip( {
   if ( response.status === 501 || response.status === 422 ) return null
 
   return parseJson( response, 'Countdown recording failed' )
+}
+
+async function uploadDeviceClip( {
+  sessionId,
+  index,
+  durationSec,
+  mirror,
+}: {
+  sessionId: string
+  index: number
+  durationSec: number
+  mirror: boolean
+} ): Promise<{ file: string; url: string } | null> {
+  const clip = await recordDeviceClip( durationSec )
+  if ( !clip ) return null
+
+  const ext = clip.type.includes( 'mp4' ) ? 'mp4' : 'webm'
+  const form = new FormData()
+  form.append( 'file', clip, `countdown-${sessionId}-${index}.${ext}` )
+  form.append( 'sessionId', sessionId )
+  form.append( 'index', String( index ) )
+  form.append( 'mirror', mirror ? '1' : '0' )
+
+  const response = await fetch( '/api/captures/countdown/upload', {
+    method : 'POST',
+    body   : form,
+  } )
+  if ( response.status === 501 || response.status === 422 ) return null
+
+  return parseJson( response, 'Countdown upload failed' )
 }
 
 // ── In-flight countdown recordings ───────────────────────────────
@@ -481,8 +617,14 @@ export async function whenCountdownClipsSettled(): Promise<void> {
 
 type MediaType = import( '@/types/booth' ).BoothMediaType
 
-/** Extract a filename from a URL like `/captures/strip-abc.jpg?v=123`. */
+/**
+ * Extract a filename from a URL like `/captures/strip-abc.jpg?v=123`. In the
+ * standalone build the URL is an object URL, so it is passed through as-is —
+ * the on-device store finds a file by either.
+ */
 function filenameFromUrl( url: string ): string | null {
+  if ( url.startsWith( 'blob:' ) ) return url
+
   return url.split( '/' ).pop()?.split( '?' )[0] || null
 }
 
@@ -537,6 +679,8 @@ export async function syncSessionToServer( {
   if ( items.length === 0 ) {
     return { success : false, error : 'No media to upload' }
   }
+
+  if ( isStandalone() ) return ( await local() ).syncLocal( sessionId, frameKey, items )
 
   try {
     const res = await fetch( '/api/booth/sync', {

@@ -1,3 +1,4 @@
+import { isStandalone } from './boothApi'
 import { normalizeSettings } from './settings.client'
 import type { BoothClientSettings, BoothSettingsResponse } from '@/types/booth'
 
@@ -10,6 +11,8 @@ export const SETTINGS_QUERY_KEY = ['booth-settings'] as const
  * keep their last known (or default) settings in that case.
  */
 export async function getBoothSettings(): Promise<BoothClientSettings> {
+  if ( isStandalone() ) return ( await import( './standalone' ) ).getSettingsLocal()
+
   const response = await fetch( '/api/booth/settings', { cache : 'no-store' } )
   const data = await response.json().catch( () => null )
 

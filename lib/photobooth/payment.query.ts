@@ -1,10 +1,10 @@
 import { boothApiJson, isStandalone } from './boothApi'
+import type { PaymentChargeResult } from '@/types/payment'
+
+export type { PaymentChargeResult, PaymentGateway } from '@/types/payment'
 
 /** POST /api/booth/payment/charge response (the fields the kiosk reads). */
-export type PaymentCharge = {
-  orderId: string
-  qrCodeUrl: string
-  deeplinkUrl?: string | null
+export type PaymentCharge = PaymentChargeResult & {
   booth?: { id: string; name: string }
 }
 

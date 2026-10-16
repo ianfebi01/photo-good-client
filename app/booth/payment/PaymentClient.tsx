@@ -9,31 +9,29 @@ import { useBoothStore } from '@/store/boothStore'
 import { usePaymentPolling } from '@/lib/hooks/usePaymentPolling'
 import { useBoothSettings } from '@/lib/hooks/useBoothSettings'
 import { createPaymentCharge } from '@/lib/photobooth/payment.query'
+import type { PaymentChargeResult } from '@/types/payment'
 
 // ── Types ──────────────────────────────────────────────────────────
 
 type Phase = 'loading' | 'idle' | 'creating' | 'pending' | 'settled' | 'paid' | 'expired' | 'error'
 
-type Charge = {
-  orderId : string
-  qrCodeUrl : string
-  deeplinkUrl : string | null
-  boothName : string
+export type PaymentChargeState = PaymentChargeResult & {
+  boothName?: string
 }
 
 // ── Reducer: payment state machine ─────────────────────────────────
 
 type PaymentState = {
   phase : Phase
-  charge : Charge | null
+  charge : PaymentChargeState | null
   errorMsg : string | null
   countdown : number
 }
 
 type PaymentAction =
-  | { type : 'HYDRATE'; phase : Phase; charge : Charge | null }
+  | { type : 'HYDRATE'; phase : Phase; charge : PaymentChargeState | null }
   | { type : 'CREATE_START' }
-  | { type : 'CREATE_OK'; charge : Charge }
+  | { type : 'CREATE_OK'; charge : PaymentChargeState }
   | { type : 'CREATE_ERROR'; error : string }
   | { type : 'SETTLEMENT' }
   | { type : 'TERMINAL'; reason : string }
@@ -89,7 +87,7 @@ function paymentReducer( state: PaymentState, action: PaymentAction ): PaymentSt
 
 /** Determine the initial phase from persisted store state.
  *  Called inside useEffect so Zustand `persist` hydration is complete. */
-function resolveInitialPhase(): { phase : Phase; charge : Charge | null } {
+function resolveInitialPhase(): { phase : Phase; charge : PaymentChargeState | null } {
   const s = useBoothStore.getState()
 
   // Payment already completed — block re-entry to this page.
@@ -101,10 +99,16 @@ function resolveInitialPhase(): { phase : Phase; charge : Charge | null } {
     return {
       phase  : 'pending',
       charge : {
-        orderId     : s.paymentOrderId,
-        qrCodeUrl   : s.paymentQrCodeUrl,
-        deeplinkUrl : s.paymentDeeplinkUrl ?? null,
-        boothName   : '',
+        orderId           : s.paymentOrderId,
+        transactionId     : null,
+        transactionStatus : 'pending',
+        qrCodeUrl         : s.paymentQrCodeUrl,
+        deeplinkUrl       : s.paymentDeeplinkUrl ?? null,
+        grossAmount       : s.paymentGrossAmount ?? 15000,
+        paymentType       : s.paymentType ?? 'qris',
+        gateway           : s.paymentGateway ?? 'doku',
+        expiryTime        : s.paymentExpiryTime ?? null,
+        boothName         : '',
       },
     }
   }
@@ -195,20 +199,32 @@ export function PaymentClient() {
 
       useBoothStore.setState( { sessionId : paySessionId } )
 
+      const chargeState: PaymentChargeState = {
+        orderId           : data.orderId,
+        transactionId     : data.transactionId ?? null,
+        transactionStatus : data.transactionStatus ?? 'pending',
+        qrCodeUrl         : data.qrCodeUrl,
+        deeplinkUrl       : data.deeplinkUrl ?? null,
+        grossAmount       : data.grossAmount,
+        paymentType       : data.paymentType ?? 'qris',
+        gateway           : data.gateway ?? 'doku',
+        expiryTime        : data.expiryTime ?? null,
+        boothName         : data.booth?.name || '',
+      }
+
       dispatch( {
         type   : 'CREATE_OK',
-        charge : {
-          orderId     : data.orderId,
-          qrCodeUrl   : data.qrCodeUrl,
-          deeplinkUrl : data.deeplinkUrl ?? null,
-          boothName   : data.booth?.name || '',
-        },
+        charge : chargeState,
       } )
       setPayment( {
         paymentStatus      : 'pending',
         paymentOrderId     : data.orderId,
         paymentQrCodeUrl   : data.qrCodeUrl,
-        paymentDeeplinkUrl : data.deeplinkUrl,
+        paymentDeeplinkUrl : data.deeplinkUrl ?? null,
+        paymentGrossAmount : data.grossAmount,
+        paymentGateway     : data.gateway ?? null,
+        paymentType        : data.paymentType ?? null,
+        paymentExpiryTime  : data.expiryTime ?? null,
       } )
     } catch ( err ) {
       dispatch( {
@@ -234,6 +250,10 @@ export function PaymentClient() {
       paymentOrderId     : null,
       paymentQrCodeUrl   : null,
       paymentDeeplinkUrl : null,
+      paymentGrossAmount : null,
+      paymentGateway     : null,
+      paymentType        : null,
+      paymentExpiryTime  : null,
     } )
     dispatch( { type : 'RESET' } )
     createCharge()
@@ -310,15 +330,23 @@ export function PaymentClient() {
           </div>
 
           <div className="flex flex-col items-center gap-6 font-jakarta">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={charge.qrCodeUrl}
-              alt="QRIS payment QR code"
-              className="w-64 h-64 border rounded-xl shadow-md"
-            />
+            {charge.qrCodeUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={charge.qrCodeUrl}
+                alt="QRIS payment QR code"
+                className="w-64 h-64 border rounded-xl shadow-md"
+              />
+            ) : (
+              <div className="w-64 h-64 border rounded-xl shadow-md flex items-center justify-center bg-muted">
+                <Loader2 className="size-8 animate-spin text-muted-foreground" />
+              </div>
+            )}
             <p className="text-sm text-muted-foreground text-center max-w-xs">
               Scan with your e-wallet app to pay{' '}
-              <strong>Rp 15.000</strong>
+              <strong>
+                Rp {charge.grossAmount ? charge.grossAmount.toLocaleString( 'id-ID' ) : '15.000'}
+              </strong>
             </p>
             {charge.deeplinkUrl && (
               <a
@@ -328,7 +356,7 @@ export function PaymentClient() {
                 className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-blue-600 bg-blue-50 rounded-full hover:bg-blue-100 transition-colors"
               >
                 <ExternalLink className="size-4" />
-                Open GoPay
+                {charge.gateway === 'midtrans' ? 'Open GoPay' : 'Open E-Wallet'}
               </a>
             )}
             <p className="text-xs text-muted-foreground/60">
@@ -345,7 +373,6 @@ export function PaymentClient() {
       </main>
     )
   }
-
   if ( phase === 'error' ) {
     return (
       <main className="flex items-center justify-center h-screen bg-neutral-100">

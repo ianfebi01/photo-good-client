@@ -5,6 +5,7 @@ import {
   DEFAULT_FRAME_KEY,
   FALLBACK_FRAMES,
 } from "@/lib/photobooth/frames.client";
+import { isStandalone } from "@/lib/photobooth/boothApi";
 import { captureShot, composeStrip } from "@/lib/photobooth/frames.query";
 import type { BoothClientSettings, CameraMode } from "@/types/booth";
 
@@ -275,7 +276,10 @@ export const useBoothStore = create<BoothState>()(
     reset : () => {
       _capturing = false;
       const previousSessionId = get().sessionId;
-      if ( previousSessionId ) {
+      if ( previousSessionId && isStandalone() ) {
+        void import( "@/lib/photobooth/standalone" )
+          .then( ( m ) => m.clearSessionLocal( previousSessionId ) );
+      } else if ( previousSessionId ) {
         void fetch( "/api/captures/session", {
           method  : "DELETE",
           headers : { "Content-Type" : "application/json" },
@@ -337,8 +341,11 @@ export const useBoothStore = create<BoothState>()(
           mirror    : mirrorCamera,
         } );
 
+        // The query busts the browser cache for a retaken slot; an object URL
+        // is already unique per shot, and would not load with one appended.
+        const url = data.url.startsWith( "blob:" ) ? data.url : `${data.url}?v=${newId()}`;
         set( {
-          pending : { file : data.file, url : `${data.url}?v=${newId()}` },
+          pending : { file : data.file, url },
           phase   : "reviewing",
         } );
       } catch ( err ) {

@@ -816,8 +816,6 @@ export async function recordCountdownClip(
 
   await mkdir( CAPTURES_DIR, { recursive : true } )
 
-  const clipName = `countdown-${sessionId}-${index}.mp4`
-  const outPath = path.join( CAPTURES_DIR, clipName )
   // Encode to a temp file and rename only once it's known good — a half-written
   // `countdown-*.mp4` would otherwise be picked up by the mashup and the sync.
   const tmpPath = path.join(
@@ -846,17 +844,7 @@ export async function recordCountdownClip(
       "-use_wallclock_as_timestamps", "1",
       "-i", streamUrl,
       "-t", String( duration ),
-      // `fps` gives a constant-rate output from the arrival timestamps;
-      // the odd-sized crop keeps any stream legal for yuv420p.
-      "-vf", `${mirror ? "hflip," : ""}fps=${CLIP_FPS},scale=trunc(iw/2)*2:trunc(ih/2)*2`,
-      "-c:v", "libx264",
-      "-preset", "veryfast",
-      "-crf", "18",
-      "-pix_fmt", "yuv420p",
-      "-profile:v", "main",
-      "-level", "4.0",
-      "-tag:v", "avc1",
-      "-movflags", "+faststart",
+      ...clipEncodeArgs( mirror ),
       tmpPath,
     ], { stdio : "ignore" } )
 
@@ -876,8 +864,49 @@ export async function recordCountdownClip(
   } )
 
   // The exit code depends on how the recording ended (`-t` stop, read timeout,
-  // or the backstop signal), so the file is the only source of truth: fewer
-  // than two frames means ffmpeg wrote an unplayable stub.
+  // or the backstop signal), so the file is the only source of truth.
+  return publishClip( sessionId, index, tmpPath )
+}
+
+/**
+ * Output side of every countdown clip: constant `CLIP_FPS`, H.264 in an MP4
+ * the mashup and the sync both accept. `fps` gives a constant rate from the
+ * input's timestamps; the even-sized scale keeps any source legal for yuv420p.
+ * `crop`, when given, runs first — before the mirror — so it is in source
+ * pixels.
+ */
+function clipEncodeArgs( mirror: boolean, crop?: string ): string[] {
+  const filters = [
+    crop ? `crop=${crop}` : null,
+    mirror ? "hflip" : null,
+    `fps=${CLIP_FPS}`,
+    "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+  ].filter( Boolean )
+
+  return [
+    "-vf", filters.join( "," ),
+    "-an",
+    "-c:v", "libx264",
+    "-preset", "veryfast",
+    "-crf", "18",
+    "-pix_fmt", "yuv420p",
+    "-profile:v", "main",
+    "-level", "4.0",
+    "-tag:v", "avc1",
+    "-movflags", "+faststart",
+  ]
+}
+
+/**
+ * Move a freshly encoded clip into place as `countdown-<session>-<index>.mp4`,
+ * or drop it when it has fewer than two frames — an unplayable stub that would
+ * break the mashup. Returns null in that case.
+ */
+async function publishClip(
+  sessionId: string,
+  index: number,
+  tmpPath: string,
+): Promise<{ file: string; url: string } | null> {
   const frames = await videoFrameCount( tmpPath )
   if ( frames < MIN_CLIP_FRAMES ) {
     await unlink( tmpPath ).catch( () => {} )
@@ -885,13 +914,70 @@ export async function recordCountdownClip(
     return null
   }
 
-  await rename( tmpPath, outPath )
+  const clipName = `countdown-${sessionId}-${index}.mp4`
+  await rename( tmpPath, path.join( CAPTURES_DIR, clipName ) )
   // Only one container may exist per index, or the mashup picks the wrong one.
   await unlink(
     path.join( CAPTURES_DIR, `countdown-${sessionId}-${index}.webm` ),
   ).catch( () => {} )
 
   return { file : clipName, url : `/api/captures/${clipName}` }
+}
+
+/** Longest a clip transcode may run before it is abandoned. */
+const CLIP_IMPORT_TIMEOUT_MS = 60_000
+
+/**
+ * Turn a countdown clip recorded on the device (MediaRecorder — WebM/VP8/VP9,
+ * or MP4 on newer WebViews, with irregular frame timing) into the same
+ * constant-rate MP4/H.264 a server-side recording produces.
+ *
+ * The clip is cropped to the booth's 3:2 capture window, matching the shot the
+ * device takes, and mirrored here rather than on the device: MediaRecorder
+ * records the camera as-is, and a canvas re-encode in the browser would cost
+ * the quality this pipeline exists to keep.
+ *
+ * Returns null when ffmpeg is unavailable or the upload holds no usable video.
+ */
+export async function importCountdownClip(
+  sessionId: string,
+  index: number,
+  data: Buffer,
+  mirror = false,
+): Promise<{ file: string; url: string } | null> {
+  if ( !( await ffmpegAvailable() ) ) return null
+
+  await mkdir( CAPTURES_DIR, { recursive : true } )
+
+  const stamp = Date.now()
+  // The extension is only a hint; ffmpeg probes the real container.
+  const inPath = path.join( CAPTURES_DIR, `.upload-${sessionId}-${index}-${stamp}` )
+  const tmpPath = path.join( CAPTURES_DIR, `.rec-${sessionId}-${index}-${stamp}.mp4` )
+  await writeFile( inPath, data )
+
+  try {
+    await new Promise<void>( ( resolve ) => {
+      const proc = spawn( "ffmpeg", [
+        "-y",
+        "-i", inPath,
+        // The largest centred 3:2 window of whatever the camera delivered.
+        ...clipEncodeArgs( mirror, "'min(iw,ih*3/2)':'min(ih,iw*2/3)'" ),
+        tmpPath,
+      ], { stdio : "ignore" } )
+
+      const killTimer = setTimeout( () => proc.kill( "SIGKILL" ), CLIP_IMPORT_TIMEOUT_MS )
+      const finish = () => {
+        clearTimeout( killTimer )
+        resolve()
+      }
+      proc.on( "close", finish )
+      proc.on( "error", finish )
+    } )
+
+    return await publishClip( sessionId, index, tmpPath )
+  } finally {
+    await unlink( inPath ).catch( () => {} )
+  }
 }
 
 // ── Save raw (unprocessed copy) ────────────────────────────────────

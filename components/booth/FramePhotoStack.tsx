@@ -11,6 +11,7 @@ import type { Swiper as SwiperClass } from 'swiper'
 
 import 'swiper/css'
 import 'swiper/css/effect-cards'
+import { FrameImage } from './FrameImage'
 
 export function FramePhotoStack( {
   frames,
@@ -98,9 +99,9 @@ export function FramePhotoStack( {
               key={frame.key}
               className="rounded-sm overflow-visible"
             >
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={`/api/frames/preview?key=${frame.key}`}
+              <FrameImage
+                frame={frame}
+                frameKey={frame.key}
                 alt={frame.label}
                 className="w-full h-full object-contain drop-shadow-xl"
                 loading={idx === initialIdx ? 'eager' : 'lazy'}

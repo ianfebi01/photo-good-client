@@ -1,15 +1,23 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useSyncExternalStore } from 'react'
 import { Camera } from 'lucide-react'
 
 import type { Phase, Shot } from '@/store/boothStore'
 import { cn } from '@/lib/utils'
+import { usesDeviceCamera } from '@/lib/photobooth/deviceCamera'
+import { activeUsbCameraBase, subscribeUsbCamera } from '@/lib/photobooth/usbCamera'
+import { DeviceStream } from './DeviceStream'
 import { LiveStream } from './LiveStream'
+import { UsbStream } from './UsbStream'
 import { getCSSFilter } from './filters'
 import { createPortal } from 'react-dom'
+
+const noSubscribe = () => () => {}
 
 interface CameraPreviewProps {
   phase: Phase
   liveSrc: string
+  /** Preview-restart signal; the device camera keys off it instead of a URL. */
+  streamKey: string
   pending: Shot | null
   activePhoto: Shot | null
   globalFilter: string
@@ -22,6 +30,7 @@ interface CameraPreviewProps {
 export function CameraPreview( {
   phase,
   liveSrc,
+  streamKey,
   pending,
   activePhoto,
   globalFilter,
@@ -39,7 +48,14 @@ export function CameraPreview( {
     : 1
   const cameraAspect = 3 / 2
 
-  const liveImgRef = useRef<HTMLImageElement | null>( null )
+  // Known only in the browser (it depends on the native bridge), so the server
+  // render always takes the camera-service path.
+  const deviceCamera = useSyncExternalStore( noSubscribe, usesDeviceCamera, () => false )
+  // A capture device read by the app's own USB driver, served as MJPEG on
+  // 127.0.0.1 — shown exactly like the camera service's preview.
+  const usbBase = useSyncExternalStore( subscribeUsbCamera, activeUsbCameraBase, () => null )
+
+  const liveImgRef = useRef<HTMLImageElement | HTMLVideoElement | HTMLCanvasElement | null>( null )
   const frozenRef = useRef<HTMLCanvasElement | null>( null )
 
   // During capture the live stream pauses (and can blank to white). The instant
@@ -50,9 +66,16 @@ export function CameraPreview( {
     if ( !running ) return
     const img = liveImgRef.current
     const canvas = frozenRef.current
-    if ( !img || !canvas || !img.naturalWidth || !img.naturalHeight ) return
-    canvas.width = img.naturalWidth
-    canvas.height = img.naturalHeight
+    if ( !img || !canvas ) return
+    const width = img instanceof HTMLVideoElement
+      ? img.videoWidth
+      : img instanceof HTMLCanvasElement ? img.width : img.naturalWidth
+    const height = img instanceof HTMLVideoElement
+      ? img.videoHeight
+      : img instanceof HTMLCanvasElement ? img.height : img.naturalHeight
+    if ( !width || !height ) return
+    canvas.width = width
+    canvas.height = height
     const context = canvas.getContext( '2d' )
     if ( !context ) return
     if ( mirrorCamera ) {
@@ -67,15 +90,38 @@ export function CameraPreview( {
       style={{ aspectRatio : '3/2' }}
     >
       {showStream ? (
-        <LiveStream
-          key="stream"
-          ref={liveImgRef}
-          src={liveSrc}
-          className={cn(
-            'absolute inset-0 h-full w-full object-cover',
-            mirrorCamera && 'scale-x-[-1]',
-          )}
-        />
+        usbBase ? (
+          <UsbStream
+            key="usb-stream"
+            ref={liveImgRef as React.Ref<HTMLCanvasElement>}
+            base={usbBase}
+            streamKey={streamKey}
+            className={cn(
+              'absolute inset-0 h-full w-full object-cover',
+              mirrorCamera && 'scale-x-[-1]',
+            )}
+          />
+        ) : deviceCamera ? (
+          <DeviceStream
+            key="device-stream"
+            ref={liveImgRef as React.Ref<HTMLVideoElement>}
+            streamKey={streamKey}
+            className={cn(
+              'absolute inset-0 h-full w-full object-cover',
+              mirrorCamera && 'scale-x-[-1]',
+            )}
+          />
+        ) : (
+          <LiveStream
+            key="stream"
+            ref={liveImgRef as React.Ref<HTMLImageElement>}
+            src={liveSrc}
+            className={cn(
+              'absolute inset-0 h-full w-full object-cover',
+              mirrorCamera && 'scale-x-[-1]',
+            )}
+          />
+        )
       ) : pending ? (
         // eslint-disable-next-line @next/next/no-img-element
         <img

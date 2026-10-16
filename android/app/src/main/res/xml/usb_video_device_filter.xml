@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- USB video class (14) devices — HDMI capture sticks, webcams. Lets Android
+     offer to open the booth when one is plugged in, and remember the choice
+     ("always open"), so the USB permission prompt is not shown every time. -->
+<resources>
+    <usb-device class="14" />
+</resources>

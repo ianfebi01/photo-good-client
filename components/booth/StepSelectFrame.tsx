@@ -5,6 +5,7 @@ import { ChevronRight } from 'lucide-react'
 import { QRModal } from './QRModal'
 import { StepHeader } from './StepHeader'
 import { cn } from '@/lib/utils'
+import { FrameImage } from './FrameImage'
 
 export function StepSelectFrame() {
   const {
@@ -67,9 +68,9 @@ export function StepSelectFrame() {
           <div className="flex flex-col items-center justify-center min-h-0 lg:h-full">
             {frame ? (
               <div className="relative h-full w-full flex items-center justify-center overflow-hidden">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={`/api/frames/preview?key=${frame.key}`}
+                <FrameImage
+                  frame={frame}
+                  frameKey={frame.key}
                   alt={frame.label}
                   className="max-h-full max-w-full object-contain drop-shadow-xl rounded-sm transition-all duration-300"
                 />
@@ -132,9 +133,9 @@ function FrameCard( {
       )}
     >
       <div className="aspect-2/3 w-full overflow-hidden rounded-lg bg-neutral-50 flex items-center justify-center">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src={`/api/frames/preview?key=${frame.key}`}
+        <FrameImage
+          frame={frame}
+          frameKey={frame.key}
           alt={frame.label}
           className="h-full w-full object-contain transition-transform duration-200 group-hover:scale-105"
           loading="lazy"

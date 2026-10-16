@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button'
 import { useBoothStore } from '@/store/boothStore'
 import { usePaymentPolling } from '@/lib/hooks/usePaymentPolling'
 import { useBoothSettings } from '@/lib/hooks/useBoothSettings'
+import { createPaymentCharge } from '@/lib/photobooth/payment.query'
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -190,14 +191,7 @@ export function PaymentClient() {
     const paySessionId = sessionId || Math.random().toString( 36 ).slice( 2, 10 )
 
     try {
-      const res = await fetch( '/api/booth/payment/charge', {
-        method  : 'POST',
-        headers : { 'Content-Type' : 'application/json' },
-        body    : JSON.stringify( { sessionId : paySessionId } ),
-      } )
-      const data = await res.json()
-
-      if ( !res.ok ) throw new Error( data.error || 'Failed to create payment' )
+      const data = await createPaymentCharge( paySessionId )
 
       useBoothStore.setState( { sessionId : paySessionId } )
 

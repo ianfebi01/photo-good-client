@@ -13,6 +13,7 @@ import { useBoothStore } from '@/store/boothStore'
 
 import { CameraPreview } from './CameraPreview'
 // import { CameraModeToggle } from './CameraModeToggle'
+import { DeviceCameraPicker } from './DeviceCameraPicker'
 import { FramePreview } from './FramePreview'
 import { ShutterControls } from './ShutterControls'
 import { StepHeader } from './StepHeader'
@@ -20,10 +21,14 @@ import { getCameraPreviewUrl } from '@/lib/photobooth/frames.query'
 import { recordCountdownClip } from '@/lib/photobooth/frames.query'
 import { trackCountdownClip } from '@/lib/photobooth/frames.query'
 import { ChevronRight } from 'lucide-react'
+import { usesDeviceCamera } from '@/lib/photobooth/deviceCamera'
 
 // ── Countdown clip ──────────────────────────────────────────────────
 //
-// The clip is recorded on the server: ffmpeg reads the live MJPEG preview this
+// With the device camera (the Android app) the clip is recorded on the device
+// instead and transcoded by the server — see recordCountdownClip.
+//
+// Otherwise the clip is recorded on the server: ffmpeg reads the live MJPEG preview this
 // page is showing and encodes the countdown window straight to MP4/H.264 (see
 // /api/captures/countdown). The browser keeps no canvas and no MediaRecorder —
 // one encode generation instead of two, no dropped frames, and nothing for the
@@ -89,6 +94,15 @@ export function StepCapture() {
   const busy = phase === 'running' || phase === 'composing'
 
   const [countdown, setCountdown] = useState<number | null>( null )
+
+  // Client-only (it depends on the native bridge); the server render never has
+  // the device camera.
+  const [deviceCamera, setDeviceCamera] = useState( false )
+  useEffect( () => {
+    const timer = setTimeout( () => setDeviceCamera( usesDeviceCamera() ), 0 )
+
+    return () => clearTimeout( timer )
+  }, [] )
 
   // ── Countdown clip ─────────────────────────────────────────────────
   // Recording happens on the server (see /api/captures/countdown): ffmpeg
@@ -359,6 +373,7 @@ export function StepCapture() {
       className={className}
       phase={phase}
       liveSrc={liveSrc}
+      streamKey={streamKey}
       pending={pending}
       activePhoto={activePhoto}
       globalFilter="none"
@@ -381,6 +396,9 @@ export function StepCapture() {
             {/* Switching source mid-shot would swap the camera under a live
                 stream, so it waits for the capture to settle. */}
             {/* <CameraModeToggle disabled={busy || countdown !== null} /> */}
+            {deviceCamera && (
+              <DeviceCameraPicker disabled={busy || countdown !== null} />
+            )}
             {adjusting && (
               <Button
                 size="lg"

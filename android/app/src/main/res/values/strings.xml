@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Photo Good Booth</string>
+    <string name="title_activity_main">Photo Good Booth</string>
+    <string name="package_name">com.photogood.booth</string>
+    <string name="custom_url_scheme">com.photogood.booth</string>
+</resources>

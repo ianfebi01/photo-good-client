@@ -8,6 +8,7 @@ import {
 import { isStandalone } from "@/lib/photobooth/boothApi";
 import { captureShot, composeStrip } from "@/lib/photobooth/frames.query";
 import type { BoothClientSettings, CameraMode } from "@/types/booth";
+import type { PaymentGateway } from "@/types/payment";
 
 export type Shot = { file: string; url: string };
 export type Phase =
@@ -110,6 +111,10 @@ export interface BoothState {
   paymentOrderId: string | null;
   paymentQrCodeUrl: string | null;
   paymentDeeplinkUrl: string | null;
+  paymentGrossAmount: number | null;
+  paymentGateway: PaymentGateway | null;
+  paymentType: string | null;
+  paymentExpiryTime: string | null;
   resultSynced: boolean;
 
   // ── Timer ──────────────────────────────────────────
@@ -178,7 +183,7 @@ export interface BoothState {
   patchAdjustment: ( index: number, patch: Partial<SlotAdjustment> ) => void;
   resetAdjustment: ( index: number ) => void;
   setGlobalFilter: ( filter: string ) => void;
-  setPayment: ( payment: Partial<Pick<BoothState, 'paymentStatus' | 'paymentOrderId' | 'paymentQrCodeUrl' | 'paymentDeeplinkUrl'>> ) => void;
+  setPayment: ( payment: Partial<Pick<BoothState, 'paymentStatus' | 'paymentOrderId' | 'paymentQrCodeUrl' | 'paymentDeeplinkUrl' | 'paymentGrossAmount' | 'paymentGateway' | 'paymentType' | 'paymentExpiryTime'>> ) => void;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────
@@ -239,6 +244,10 @@ export const useBoothStore = create<BoothState>()(
     paymentOrderId     : null,
     paymentQrCodeUrl   : null,
     paymentDeeplinkUrl : null,
+    paymentGrossAmount : null,
+    paymentGateway     : null,
+    paymentType        : null,
+    paymentExpiryTime  : null,
     resultSynced       : false,
 
     // ── Setters ────────────────────────────────────

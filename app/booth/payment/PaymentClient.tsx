@@ -2,22 +2,27 @@
 
 import { useCallback, useEffect, useReducer, useRef } from 'react'
 import { useRouter } from 'next/navigation'
-import { Loader2, AlertCircle, CheckCircle2, ExternalLink, X } from 'lucide-react'
 
-import { Button } from '@/components/ui/button'
 import { useBoothStore } from '@/store/boothStore'
 import { usePaymentPolling } from '@/lib/hooks/usePaymentPolling'
 import { useBoothSettings } from '@/lib/hooks/useBoothSettings'
 import { createPaymentCharge } from '@/lib/photobooth/payment.query'
-import type { PaymentChargeResult } from '@/types/payment'
+import type { PaymentChargeState } from '@/types/payment'
+import {
+  PhaseLoading,
+  PhaseCreating,
+  PhasePending,
+  PhaseSettled,
+  PhaseError,
+  PhaseExpired,
+  PhaseFallback,
+} from '@/components/payment'
 
 // ── Types ──────────────────────────────────────────────────────────
 
 type Phase = 'loading' | 'idle' | 'creating' | 'pending' | 'settled' | 'paid' | 'expired' | 'error'
 
-export type PaymentChargeState = PaymentChargeResult & {
-  boothName?: string
-}
+export type { PaymentChargeState } from '@/types/payment'
 
 // ── Reducer: payment state machine ─────────────────────────────────
 
@@ -263,181 +268,36 @@ export function PaymentClient() {
 
   // Still resolving store hydration — show a neutral loader so we never
   // flash 'idle' or stale UI before snapping to the real phase.
-  if ( phase === 'loading' ) {
-    return (
-      <main className="flex items-center justify-center h-screen bg-neutral-100">
-        <Loader2 className="size-10 animate-spin text-muted-foreground" />
-      </main>
-    )
+  if ( phase === 'loading' || phase === 'paid' ) {
+    return <PhaseLoading />
   }
 
   // Fresh settlement: show countdown, then promote to 'paid' & persist.
   if ( phase === 'settled' ) {
-    return (
-      <main className="flex items-center justify-center h-screen bg-neutral-100">
-        <div className="flex flex-col items-center gap-6 px-4 animate-in fade-in duration-500">
-          <CheckCircle2 className="size-16 text-emerald-500" />
-          <div className="text-center">
-            <h3 className="text-xl font-bold text-emerald-600">Payment Successful!</h3>
-            <p className="text-sm text-muted-foreground mt-1 font-jakarta">
-              Get ready for your photo session!
-            </p>
-            <p className="text-3xl font-bold text-emerald-600 mt-4 tabular-nums">
-              {countdown}
-            </p>
-            <p className="text-xs text-muted-foreground mt-1 font-jakarta">
-              Starting in {countdown} second{countdown !== 1 ? 's' : ''}&hellip;
-            </p>
-          </div>
-        </div>
-      </main>
-    )
-  }
-
-  // Revisit after payment: store already says 'paid', redirect instantly.
-  if ( phase === 'paid' ) {
-    return (
-      <main className="flex items-center justify-center h-screen bg-neutral-100">
-        <Loader2 className="size-10 animate-spin text-muted-foreground" />
-      </main>
-    )
+    return <PhaseSettled countdown={countdown} />
   }
 
   if ( phase === 'creating' ) {
-    return (
-      <main className="flex items-center justify-center h-screen bg-neutral-100">
-        <div className="flex flex-col items-center gap-6 px-4">
-          <Loader2 className="size-12 animate-spin text-muted-foreground" />
-          <p className="text-lg font-medium text-muted-foreground">
-            Creating payment&hellip;
-          </p>
-        </div>
-      </main>
-    )
+    return <PhaseCreating />
   }
 
   if ( phase === 'pending' && charge ) {
-    return (
-      <main className="flex items-center justify-center min-h-screen bg-neutral-100">
-        <div className="container px-4 py-8 mx-auto">
-          <div className="mb-8 space-y-3 text-center">
-            <h2 className="text-3xl font-bold tracking-tight lg:text-4xl text-foreground">
-              Scan to Start
-            </h2>
-            <p className="max-w-md mx-auto text-sm text-muted-foreground lg:text-base font-jakarta">
-              Pay with QRIS via GoPay or any e-wallet to begin your photo session.
-            </p>
-          </div>
-
-          <div className="flex flex-col items-center gap-6 font-jakarta">
-            {charge.qrCodeUrl ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={charge.qrCodeUrl}
-                alt="QRIS payment QR code"
-                className="w-64 h-64 border rounded-xl shadow-md"
-              />
-            ) : (
-              <div className="w-64 h-64 border rounded-xl shadow-md flex items-center justify-center bg-muted">
-                <Loader2 className="size-8 animate-spin text-muted-foreground" />
-              </div>
-            )}
-            <p className="text-sm text-muted-foreground text-center max-w-xs">
-              Scan with your e-wallet app to pay{' '}
-              <strong>
-                Rp {charge.grossAmount ? charge.grossAmount.toLocaleString( 'id-ID' ) : '15.000'}
-              </strong>
-            </p>
-            {charge.deeplinkUrl && (
-              <a
-                href={charge.deeplinkUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-blue-600 bg-blue-50 rounded-full hover:bg-blue-100 transition-colors"
-              >
-                <ExternalLink className="size-4" />
-                {charge.gateway === 'midtrans' ? 'Open GoPay' : 'Open E-Wallet'}
-              </a>
-            )}
-            <p className="text-xs text-muted-foreground/60">
-              Waiting for payment&hellip;
-            </p>
-          </div>
-
-          {charge.boothName && (
-            <p className="mt-8 text-xs text-center text-muted-foreground/40">
-              {charge.boothName}
-            </p>
-          )}
-        </div>
-      </main>
-    )
+    return <PhasePending charge={charge} />
   }
+
   if ( phase === 'error' ) {
     return (
-      <main className="flex items-center justify-center h-screen bg-neutral-100">
-        <div className="flex flex-col items-center gap-6 px-4">
-          <AlertCircle className="size-12 text-red-500" />
-          <div className="text-center">
-            <h3 className="text-lg font-bold text-red-600">Payment Error</h3>
-            <p className="text-sm text-muted-foreground mt-1 max-w-xs">
-              {errorMsg || 'Something went wrong. Please try again.'}
-            </p>
-          </div>
-          <Button
-            size="lg"
-            variant="outline"
-            onClick={handleRetry}
-          >
-            Try Again
-          </Button>
-        </div>
-      </main>
+      <PhaseError
+        errorMsg={errorMsg}
+        onRetry={handleRetry}
+      />
     )
   }
 
   if ( phase === 'expired' ) {
-    return (
-      <main className="flex items-center justify-center h-screen bg-neutral-100">
-        <div className="flex flex-col items-center gap-6 px-4">
-          <AlertCircle className="size-12 text-amber-500" />
-          <div className="text-center">
-            <h3 className="text-lg font-bold text-amber-600">Payment Expired</h3>
-            <p className="text-sm text-muted-foreground mt-1">
-              The payment window has closed. Please try again.
-            </p>
-          </div>
-          <Button
-            size="lg"
-            variant="outline"
-            onClick={handleRetry}
-          >
-            Create New Payment
-          </Button>
-        </div>
-      </main>
-    )
+    return <PhaseExpired onRetry={handleRetry} />
   }
 
   // Fallback
-  return (
-    <main className="flex items-center justify-center h-screen bg-neutral-100">
-      <div className="flex flex-col items-center gap-6 px-4">
-        <X className="size-16 text-red-500" />
-        <div className="text-center">
-          <h3 className="text-xl font-bold text-red-600">No Payment Detected</h3>
-          <p className="text-sm text-muted-foreground mt-1 font-jakarta">
-            Please complete the payment to continue.
-          </p>
-        </div>
-        <Button
-          size="lg"
-          variant="outline"
-          onClick={handleRetry}
-        >
-          Try Again
-        </Button>
-      </div>
-    </main>
-  )
+  return <PhaseFallback onRetry={handleRetry} />
 }

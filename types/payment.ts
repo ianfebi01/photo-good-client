@@ -11,3 +11,7 @@ export interface PaymentChargeResult {
   gateway : PaymentGateway
   expiryTime? : string | null
 }
+
+export type PaymentChargeState = PaymentChargeResult & {
+  boothName? : string
+}

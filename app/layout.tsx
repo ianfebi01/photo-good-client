@@ -47,7 +47,12 @@ export default function RootLayout( {
       lang="en"
       className={`${shadowFont.variable} ${geistMono.variable} ${poppins.variable} ${inter.variable} ${jakarta.variable} h-full w-screen overflow-hidden antialiased`}
     >
-      <body className="h-full flex flex-col overflow-y-auto">
+      {/* Browser extensions (e.g. ColorZilla's `cz-shortcut-listen`) add
+          attributes to <body> before hydration. */}
+      <body
+        className="h-full flex flex-col overflow-y-auto"
+        suppressHydrationWarning
+      >
         <Providers>{children}</Providers>
       </body>
     </html>

@@ -183,10 +183,19 @@ export function StepResult() {
     doSync()
   }, [doSync] )
 
+  // Navigate first and reset once the booth has unmounted. Resetting
+  // eagerly clears `paymentStatus` while BoothClient is still mounted,
+  // so its payment guard redirects to /booth/payment and wins the race.
+  const resetOnLeaveRef = useRef( false )
+
+  useEffect( () => () => {
+    if ( resetOnLeaveRef.current ) reset()
+  }, [reset] )
+
   const resetSession = useCallback( () => {
-    reset()
+    resetOnLeaveRef.current = true
     router.replace( '/' )
-  }, [reset, router] )
+  }, [router] )
 
   // ── Idle timer expiry → navigate home ───────────────────────────
   // StepTimer counts down and calls reset() when it reaches 1.

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { useShallow } from 'zustand/react/shallow'
 
 import { Button } from '@/components/ui/button'
 import { useBoothStore } from '@/store/boothStore'
@@ -16,172 +17,147 @@ import { SyncStatusBanner, type SyncStatus } from '@/components/booth/SyncStatus
 import { VideoGenBadges, isSettled, type GenStatus } from '@/components/booth/VideoGenBadges'
 import { QRSection } from '@/components/booth/QRSection'
 
+// ── Session media (read fresh from the store at call time) ─────────
+
+type GeneratedVideo = { url : string } | null
+
+/** Countdown mashup, or an image slideshow when there are no clips. */
+async function generateMashup(): Promise<GeneratedVideo> {
+  // A clip may still be recording (ffmpeg finishes once the preview goes
+  // quiet after the shot), so wait for it before reading the clip list.
+  await whenCountdownClipsSettled()
+  const s = useBoothStore.getState()
+
+  return generateSessionVideo( {
+    sessionId      : s.sessionId,
+    files          : s.photos.map( ( p ) => p.file ),
+    countdownFiles : s.countdownClips.map( ( c ) => c.file ),
+    frameKey       : s.frameKey,
+    // The strip applied the filter step's choice to every slot, so the
+    // video has to as well.
+    adjustments    : s.adjustments.map( ( adj ) => ( { ...adj, filter : s.globalFilter } ) ),
+  } )
+}
+
+/** 15-second loop video from all images. */
+function generateLoop(): Promise<GeneratedVideo> {
+  const s = useBoothStore.getState()
+
+  return generateSessionLoopVideo( { sessionId : s.sessionId, files : s.photos.map( ( p ) => p.file ) } )
+}
+
+function syncSession() {
+  const s = useBoothStore.getState()
+
+  return syncSessionToServer( {
+    sessionId          : s.sessionId,
+    frameKey           : s.frameKey,
+    stripUrl           : s.strip,
+    photoFiles         : s.photos.map( ( p ) => p.file ),
+    videoUrl           : s.videoUrl ?? null,
+    loopVideoUrl       : s.loopVideoUrl ?? null,
+    countdownClipFiles : s.countdownClips.map( ( c ) => c.file ),
+  } )
+}
+
+// ── Hooks ──────────────────────────────────────────────────────────
+
+/**
+ * Generate a video once `enabled` turns true, unless the store already has
+ * one. While it runs the status reads as 'loading'.
+ */
+function useGeneratedVideo(
+  url: string | null,
+  enabled: boolean,
+  generate: () => Promise<GeneratedVideo>,
+  save: ( url: string ) => void,
+): GenStatus {
+  const [failure, setFailure] = useState<'error' | 'unavailable' | null>( null )
+  const startedRef = useRef( false )
+
+  useEffect( () => {
+    if ( !enabled || url || startedRef.current ) return
+    startedRef.current = true
+
+    generate()
+      .then( ( video ) => ( video ? save( video.url ) : setFailure( 'unavailable' ) ) )
+      .catch( () => setFailure( 'error' ) )
+  }, [enabled, url, generate, save] )
+
+  if ( url ) return 'ready'
+  if ( failure ) return failure
+
+  return enabled ? 'loading' : 'idle'
+}
+
+/**
+ * Upload the session once `enabled` turns true. `resultSynced` in the store
+ * keeps it from uploading twice; clearing the error via `retry` re-runs it.
+ */
+function useResultSync( enabled: boolean ) {
+  const resultSynced = useBoothStore( ( s ) => s.resultSynced )
+  const sessionId = useBoothStore( ( s ) => s.sessionId )
+  const [error, setError] = useState<string | null>( null )
+  const [syncedId, setSyncedId] = useState<string | null>( null )
+  const inFlightRef = useRef( false )
+
+  const shouldSync = enabled && !resultSynced && !error
+
+  useEffect( () => {
+    if ( !shouldSync || inFlightRef.current ) return
+    inFlightRef.current = true
+
+    syncSession()
+      .then( ( result ) => {
+        if ( result.success ) {
+          setSyncedId( result.sessionId ?? null )
+          useBoothStore.setState( { resultSynced : true } )
+        } else {
+          setError( result.error ?? 'Unknown error' )
+        }
+      } )
+      .catch( ( err ) => setError( err instanceof Error ? err.message : 'Unknown error' ) )
+      .finally( () => {
+        inFlightRef.current = false
+      } )
+  }, [shouldSync] )
+
+  let status: SyncStatus = 'idle'
+  if ( resultSynced ) status = 'done'
+  else if ( error ) status = 'error'
+  else if ( shouldSync ) status = 'syncing'
+
+  return {
+    status,
+    error,
+    resultSessionId : resultSynced ? syncedId ?? sessionId : null,
+    retry           : () => setError( null ),
+  }
+}
+
 // ── Main component ─────────────────────────────────────────────────
 
 export function StepResult() {
-  const {
-    strip,
-    videoUrl,
-    loopVideoUrl,
-    frameKey,
-    photos,
-    sessionId,
-    countdownClips,
-    timerEnabled,
-    timerSecondsLeft,
-    resultSynced,
-    reset,
-    setVideoUrl,
-    setLoopVideoUrl,
-  } = useBoothStore()
-
   const router = useRouter()
+  const {
+    strip, hasPhotos, videoUrl, loopVideoUrl, timerEnabled, timerSecondsLeft,
+    reset, setVideoUrl, setLoopVideoUrl,
+  } = useBoothStore( useShallow( ( s ) => ( {
+    strip            : s.strip,
+    hasPhotos        : s.photos.length > 0,
+    videoUrl         : s.videoUrl,
+    loopVideoUrl     : s.loopVideoUrl,
+    timerEnabled     : s.timerEnabled,
+    timerSecondsLeft : s.timerSecondsLeft,
+    reset            : s.reset,
+    setVideoUrl      : s.setVideoUrl,
+    setLoopVideoUrl  : s.setLoopVideoUrl,
+  } ) ) )
 
-  // ── Derive initial statuses from persisted store values ─────────
-  const [videoStatus, setVideoStatus] = useState<GenStatus>( () =>
-    videoUrl ? 'ready' : 'idle',
-  )
-  const [loopStatus, setLoopStatus] = useState<GenStatus>( () =>
-    loopVideoUrl ? 'ready' : 'idle',
-  )
-
-  // Ref-based guards for one-shot generation & sync
-  const startedRef = useRef( { video : false, loop : false } )
-  const syncAttemptedRef = useRef( false )
-
-  // ── Reset in-flight guards when the session changes ──────────────
-  // Must be in a useEffect (before the generation effect) to comply
-  // with React 19's rule against reading/writing refs during render.
-  useEffect( () => {
-    startedRef.current = { video : false, loop : false }
-    syncAttemptedRef.current = false
-    // Re-derive statuses from (potentially new) store values.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setVideoStatus( videoUrl ? 'ready' : 'idle' )
-    setLoopStatus( loopVideoUrl ? 'ready' : 'idle' )
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId] )
-
-  // ── Kick off video generation after the strip is ready ──────────
-  useEffect( () => {
-    if ( !strip || photos.length === 0 ) return
-
-    const files = photos.map( ( p ) => p.file )
-
-    // Countdown mashup (or image slideshow fallback)
-    if ( !startedRef.current.video && !videoUrl ) {
-      startedRef.current.video = true
-      setVideoStatus( 'loading' )
-      // A clip may still be recording (ffmpeg finishes once the preview goes
-      // quiet after the shot), so wait for it and then read the clip list fresh
-      // from the store instead of this render's snapshot.
-      whenCountdownClipsSettled()
-        .then( () => {
-          // Read the clips and the framing fresh from the store after the wait,
-          // rather than from this render's snapshot. The strip applied the
-          // filter step's choice to every slot, so the video has to as well.
-          const current = useBoothStore.getState()
-
-          return generateSessionVideo( {
-            sessionId,
-            files,
-            countdownFiles : current.countdownClips.map( ( c ) => c.file ),
-            frameKey,
-            adjustments    : current.adjustments.map( ( adj ) => ( {
-              ...adj,
-              filter : current.globalFilter,
-            } ) ),
-          } )
-        } )
-        .then( ( r ) => {
-          if ( r ) {
-            setVideoUrl( r.url )
-            setVideoStatus( 'ready' )
-          } else {
-            setVideoStatus( 'unavailable' )
-          }
-        } )
-        .catch( () => setVideoStatus( 'error' ) )
-    }
-
-    // 15-second loop video from all images
-    if ( !startedRef.current.loop && !loopVideoUrl ) {
-      startedRef.current.loop = true
-      setLoopStatus( 'loading' )
-      generateSessionLoopVideo( { sessionId, files } )
-        .then( ( r ) => {
-          if ( r ) {
-            setLoopVideoUrl( r.url )
-            setLoopStatus( 'ready' )
-          } else {
-            setLoopStatus( 'unavailable' )
-          }
-        } )
-        .catch( () => setLoopStatus( 'error' ) )
-    }
-  }, [
-    strip,
-    photos,
-    sessionId,
-    videoUrl,
-    loopVideoUrl,
-    frameKey,
-    setVideoUrl,
-    setLoopVideoUrl,
-  ] )
-
-  // ── Server sync ─────────────────────────────────────────────────
-  const [syncStatus, setSyncStatus] = useState<SyncStatus>(
-    resultSynced ? 'done' : 'idle',
-  )
-  const [syncError, setSyncError] = useState<string | null>( null )
-  const [resultSessionId, setResultSessionId] = useState<string | null>(
-    resultSynced ? sessionId : null,
-  )
-
-  const doSync = useCallback( async () => {
-    if ( !strip || photos.length === 0 ) return
-
-    setSyncStatus( 'syncing' )
-    setSyncError( null )
-
-    const result = await syncSessionToServer( {
-      sessionId,
-      frameKey,
-      stripUrl           : strip,
-      photoFiles         : photos.map( ( p ) => p.file ),
-      videoUrl           : videoUrl ?? null,
-      loopVideoUrl       : loopVideoUrl ?? null,
-      countdownClipFiles : countdownClips.map( ( c ) => c.file ),
-    } )
-
-    if ( result.success ) {
-      setSyncStatus( 'done' )
-      setResultSessionId( result.sessionId ?? sessionId )
-      useBoothStore.setState( { resultSynced : true } )
-    } else {
-      setSyncStatus( 'error' )
-      setSyncError( result.error ?? 'Unknown error' )
-    }
-  }, [strip, photos, sessionId, frameKey, videoUrl, loopVideoUrl, countdownClips] )
-
-  // Auto-trigger sync once both video statuses have settled.
-  // Persisted `resultSynced` prevents re-syncing on page refresh.
-  useEffect( () => {
-    if ( syncAttemptedRef.current || resultSynced ) return
-    if ( !strip || photos.length === 0 ) return
-    if ( !isSettled( videoStatus ) || !isSettled( loopStatus ) ) return
-
-    syncAttemptedRef.current = true
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    doSync()
-  }, [strip, photos, videoStatus, loopStatus, resultSynced, doSync] )
-
-  // Manual retry — calls doSync directly without waiting for the
-  // auto-trigger effect (avoids double-fire).
-  const retrySync = useCallback( () => {
-    doSync()
-  }, [doSync] )
+  const hasMedia = Boolean( strip ) && hasPhotos
+  const videoStatus = useGeneratedVideo( videoUrl, hasMedia, generateMashup, setVideoUrl )
+  const loopStatus = useGeneratedVideo( loopVideoUrl, hasMedia, generateLoop, setLoopVideoUrl )
+  const sync = useResultSync( hasMedia && isSettled( videoStatus ) && isSettled( loopStatus ) )
 
   // Navigate first and reset once the booth has unmounted. Resetting
   // eagerly clears `paymentStatus` while BoothClient is still mounted,
@@ -197,78 +173,65 @@ export function StepResult() {
     router.replace( '/' )
   }, [router] )
 
-  // ── Idle timer expiry → navigate home ───────────────────────────
-  // StepTimer counts down and calls reset() when it reaches 1.
-  // On the result step, we navigate to the homepage instead of
-  // just resetting back to the frame selector.
+  // StepTimer calls reset() when it reaches 1; on this step we go home
+  // instead of falling back to the frame selector.
   useEffect( () => {
-    if ( !timerEnabled || timerSecondsLeft === null ) return
-    if ( timerSecondsLeft <= 1 ) {
-      resetSession()
-    }
-  }, [timerSecondsLeft, timerEnabled, resetSession] )
+    if ( timerEnabled && timerSecondsLeft !== null && timerSecondsLeft <= 1 ) resetSession()
+  }, [timerEnabled, timerSecondsLeft, resetSession] )
 
-  // ── Early return: no strip yet ──────────────────────────────────
   if ( !strip ) return null
 
   return (
     <div className="container px-4 py-8 mx-auto overflow-auto lg:py-12 grow scrollbar-none lg:flex lg:flex-col lg:justify-center">
-      {/* ── Header ───────────────────────────────────────────────── */}
       <div className="mb-10 space-y-2 text-center">
         <h2 className="text-3xl font-bold tracking-tight lg:text-4xl text-foreground">
           Your photos are ready!
         </h2>
-        <p className="max-w-md mx-auto text-sm text-muted-foreground lg:text-base font font-jakarta">
+        <p className="max-w-md mx-auto text-sm text-muted-foreground lg:text-base font-jakarta">
           Download your photo strip, countdown mashup, or 15-second loop
           video below.
         </p>
       </div>
-      <div className='font-jakarta'>
-        {/* ── Video generation status ──────────────────────────────── */}
+
+      <div className="font-jakarta">
         <VideoGenBadges
           videoStatus={videoStatus}
           loopStatus={loopStatus}
         />
 
-        {/* ── Upload status banner ─────────────────────────────────── */}
         <div className="flex items-center justify-center gap-2 mb-6">
           <SyncStatusBanner
-            status={syncStatus}
-            error={syncError}
-            onRetry={retrySync}
+            status={sync.status}
+            error={sync.error}
+            onRetry={sync.retry}
           />
         </div>
 
-        {/* ── QR Code + Strip preview ──────────────────────────────── */}
         <div className="flex flex-col items-center gap-8 lg:flex-row lg:justify-center lg:items-center">
-          {/* Strip preview */}
-          {strip && (
-            <div className="w-full max-w-xs">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={strip}
-                alt="Composed photo strip"
-                className="w-full border rounded-xl shadow-md"
-              />
-            </div>
-          )}
+          <div className="w-full max-w-xs">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={strip}
+              alt="Composed photo strip"
+              className="w-full border rounded-xl shadow-md"
+            />
+          </div>
 
-          {/* QR Code — always occupies its space to prevent layout shift */}
+          {/* Always occupies its space to prevent layout shift */}
           <QRSection
-            syncStatus={syncStatus}
-            resultSessionId={resultSessionId}
+            syncStatus={sync.status}
+            resultSessionId={sync.resultSessionId}
           />
         </div>
 
-        {/* ── Bottom actions ────────────────────────────────────────── */}
         <div className="flex justify-center gap-3 mt-10">
           <Button
             size="lg"
             variant="outline"
             onClick={resetSession}
-            disabled={syncStatus === 'syncing'}
+            disabled={sync.status === 'syncing'}
           >
-          Start new session
+            Start new session
           </Button>
         </div>
       </div>

@@ -13,20 +13,19 @@ export type PollResult =
 
 const POLL_INTERVAL = 3_000
 const POLL_TIMEOUT = 300_000
+const POLLING: PollResult = { status : 'polling' }
 
 // ── Hook ───────────────────────────────────────────────────────────
 
 export function usePaymentPolling( orderId: string | null ): PollResult {
-  const [result, setResult] = useState<PollResult>( { status : 'polling' } )
+  // Results are tagged with their orderId so a stale result from a previous
+  // charge never leaks into the next one.
+  const [tagged, setTagged] = useState<{ orderId : string; result : PollResult } | null>( null )
 
   useEffect( () => {
     if ( !orderId ) return
 
-    // Reset to 'polling' when the orderId changes so a stale result from
-    // a previous charge doesn't leak into the new one.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setResult( { status : 'polling' } )
-
+    const setResult = ( result: PollResult ) => setTagged( { orderId, result } )
     let alive = true
     let interval: ReturnType<typeof setInterval> | null = null
     let timeout: ReturnType<typeof setTimeout> | null = null
@@ -57,5 +56,5 @@ export function usePaymentPolling( orderId: string | null ): PollResult {
     }
   }, [orderId] )
 
-  return result
+  return tagged && tagged.orderId === orderId ? tagged.result : POLLING
 }

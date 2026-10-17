@@ -1,7 +1,8 @@
 'use client'
 
-import { useCallback, useEffect, useReducer, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { useShallow } from 'zustand/react/shallow'
 
 import { useBoothStore } from '@/store/boothStore'
 import { usePaymentPolling } from '@/lib/hooks/usePaymentPolling'
@@ -15,289 +16,145 @@ import {
   PhaseSettled,
   PhaseError,
   PhaseExpired,
-  PhaseFallback,
 } from '@/components/payment'
-
-// ── Types ──────────────────────────────────────────────────────────
-
-type Phase = 'loading' | 'idle' | 'creating' | 'pending' | 'settled' | 'paid' | 'expired' | 'error'
 
 export type { PaymentChargeState } from '@/types/payment'
 
-// ── Reducer: payment state machine ─────────────────────────────────
+const SETTLED_COUNTDOWN = 5
 
-type PaymentState = {
-  phase : Phase
-  charge : PaymentChargeState | null
-  errorMsg : string | null
-  countdown : number
-}
+const CLEARED_PAYMENT = {
+  paymentStatus      : 'idle',
+  paymentOrderId     : null,
+  paymentQrCodeUrl   : null,
+  paymentDeeplinkUrl : null,
+  paymentGrossAmount : null,
+  paymentGateway     : null,
+  paymentType        : null,
+  paymentExpiryTime  : null,
+} as const
 
-type PaymentAction =
-  | { type : 'HYDRATE'; phase : Phase; charge : PaymentChargeState | null }
-  | { type : 'CREATE_START' }
-  | { type : 'CREATE_OK'; charge : PaymentChargeState }
-  | { type : 'CREATE_ERROR'; error : string }
-  | { type : 'SETTLEMENT' }
-  | { type : 'TERMINAL'; reason : string }
-  | { type : 'TICK' }
-  | { type : 'PAID' }
-  | { type : 'RESET' }
-
-const initialState: PaymentState = {
-  phase     : 'loading',
-  charge    : null,
-  errorMsg  : null,
-  countdown : 5,
-}
-
-function paymentReducer( state: PaymentState, action: PaymentAction ): PaymentState {
-  switch ( action.type ) {
-  case 'HYDRATE':
-    return { ...state, phase : action.phase, charge : action.charge }
-
-  case 'CREATE_START':
-    return { ...state, phase : 'creating', errorMsg : null }
-
-  case 'CREATE_OK':
-    return { ...state, phase : 'pending', charge : action.charge }
-
-  case 'CREATE_ERROR':
-    return { ...state, phase : 'error', errorMsg : action.error }
-
-  case 'SETTLEMENT':
-    return { ...state, phase : 'settled', countdown : 5 }
-
-  case 'TERMINAL': {
-    const phase = action.reason === 'expire' ? 'expired' as const : 'error' as const
-
-    return { ...state, phase, errorMsg : `Payment ${action.reason}` }
-  }
-
-  case 'TICK':
-    return { ...state, countdown : Math.max( 0, state.countdown - 1 ) }
-
-  case 'PAID':
-    return { ...state, phase : 'paid' }
-
-  case 'RESET':
-    return { ...initialState, phase : 'idle' }
-
-  default:
-    return state
-  }
-}
-
-// ── Helpers ────────────────────────────────────────────────────────
-
-/** Determine the initial phase from persisted store state.
- *  Called inside useEffect so Zustand `persist` hydration is complete. */
-function resolveInitialPhase(): { phase : Phase; charge : PaymentChargeState | null } {
-  const s = useBoothStore.getState()
-
-  // Payment already completed — block re-entry to this page.
-  if ( s.paymentStatus === 'paid' ) {
-    return { phase : 'paid', charge : null }
-  }
-
-  if ( s.paymentOrderId && s.paymentQrCodeUrl ) {
-    return {
-      phase  : 'pending',
-      charge : {
-        orderId           : s.paymentOrderId,
-        transactionId     : null,
-        transactionStatus : 'pending',
-        qrCodeUrl         : s.paymentQrCodeUrl,
-        deeplinkUrl       : s.paymentDeeplinkUrl ?? null,
-        grossAmount       : s.paymentGrossAmount ?? 15000,
-        paymentType       : s.paymentType ?? 'qris',
-        gateway           : s.paymentGateway ?? 'doku',
-        expiryTime        : s.paymentExpiryTime ?? null,
-        boothName         : '',
-      },
-    }
-  }
-
-  return { phase : 'idle', charge : null }
-}
-
-// ── Component ──────────────────────────────────────────────────────
-
+/**
+ * The charge lives in the booth store, so this component only keeps what is
+ * local to the screen: a create error, the booth name from the charge
+ * response, and the post-settlement countdown. Everything else is derived.
+ */
 export function PaymentClient() {
   const router = useRouter()
-  const { sessionId, setPayment } = useBoothStore()
-  const [state, dispatch] = useReducer( paymentReducer, initialState )
-  const { phase, charge, errorMsg, countdown } = state
+  const settingsQuery = useBoothSettings()
+  const payment = useBoothStore( useShallow( ( s ) => ( {
+    status      : s.paymentStatus,
+    orderId     : s.paymentOrderId,
+    qrCodeUrl   : s.paymentQrCodeUrl,
+    deeplinkUrl : s.paymentDeeplinkUrl,
+    grossAmount : s.paymentGrossAmount,
+    gateway     : s.paymentGateway,
+    type        : s.paymentType,
+    expiryTime  : s.paymentExpiryTime,
+  } ) ) )
+  const setPayment = useBoothStore( ( s ) => s.setPayment )
 
+  const [createError, setCreateError] = useState<string | null>( null )
+  const [boothName, setBoothName] = useState( '' )
+  const [countdown, setCountdown] = useState( SETTLED_COUNTDOWN )
   const creatingRef = useRef( false )
 
-  // ── Per-booth settings ─────────────────────────────────────────
-  const settingsQuery = useBoothSettings()
+  const paymentDisabled = settingsQuery.data?.paymentEnabled === false
+  const hasCharge = Boolean( payment.orderId && payment.qrCodeUrl )
+  const failed = payment.status === 'expired' || payment.status === 'error' || createError !== null
+  const needsCharge = !settingsQuery.isPending && !paymentDisabled
+    && payment.status !== 'paid' && !hasCharge && !failed
 
-  // ── Hydrate from persisted store after mount ───────────────────
-  // Gated on settings: reaching the 'idle' phase auto-creates a charge, so a
-  // booth with payment turned off must bail out before that happens.
+  const pollResult = usePaymentPolling( hasCharge && !failed ? payment.orderId : null )
+  const settled = pollResult.status === 'settlement'
+
+  // ── Leave when payment is off for this booth or already done ───
   useEffect( () => {
-    if ( settingsQuery.isPending ) return
+    if ( paymentDisabled || payment.status === 'paid' ) router.replace( '/booth' )
+  }, [paymentDisabled, payment.status, router] )
 
-    if ( settingsQuery.data && !settingsQuery.data.paymentEnabled ) {
-      router.replace( '/booth' )
-
-      return
-    }
-
-    const resolved = resolveInitialPhase()
-    dispatch( { type : 'HYDRATE', phase : resolved.phase, charge : resolved.charge } )
-  }, [settingsQuery.isPending, settingsQuery.data, router] )
-
-  // ── Poll while pending ─────────────────────────────────────────
-  const pollResult = usePaymentPolling(
-    phase === 'pending' ? charge?.orderId ?? null : null,
-  )
-
-  // ── React to poll result ───────────────────────────────────────
+  // ── Create a charge whenever there isn't one ───────────────────
   useEffect( () => {
-    if ( pollResult.status === 'settlement' ) {
-      dispatch( { type : 'SETTLEMENT' } )
-    } else if ( pollResult.status === 'terminal' ) {
-      dispatch( { type : 'TERMINAL', reason : pollResult.reason } )
-      setPayment( { paymentStatus : pollResult.reason as 'expired' | 'error' } )
-    }
-    // 'polling' is intentionally ignored
-  }, [pollResult, setPayment] )
-
-  // ── Redirect immediately if re-entering after payment ───────────
-  useEffect( () => {
-    if ( phase === 'paid' ) {
-      router.replace( '/booth' )
-    }
-  }, [phase, router] )
-
-  // ── Countdown after settlement ─────────────────────────────────
-  useEffect( () => {
-    if ( phase !== 'settled' ) return
-
-    const id = setInterval( () => dispatch( { type : 'TICK' } ), 1000 )
-
-    return () => clearInterval( id )
-  }, [phase] )
-
-  // ── Countdown complete → promote to paid & navigate ────────────
-  useEffect( () => {
-    if ( phase === 'settled' && countdown === 0 ) {
-      dispatch( { type : 'PAID' } )
-      setPayment( { paymentStatus : 'paid' } )
-      router.replace( '/booth' )
-    }
-  }, [phase, countdown, router, setPayment] )
-
-  // ── Create charge ──────────────────────────────────────────────
-  const createCharge = useCallback( async () => {
-    if ( creatingRef.current ) return
+    if ( !needsCharge || creatingRef.current ) return
     creatingRef.current = true
 
-    dispatch( { type : 'CREATE_START' } )
-    const paySessionId = sessionId || Math.random().toString( 36 ).slice( 2, 10 )
+    const sessionId = useBoothStore.getState().sessionId || Math.random().toString( 36 ).slice( 2, 10 )
 
-    try {
-      const data = await createPaymentCharge( paySessionId )
-
-      useBoothStore.setState( { sessionId : paySessionId } )
-
-      const chargeState: PaymentChargeState = {
-        orderId           : data.orderId,
-        transactionId     : data.transactionId ?? null,
-        transactionStatus : data.transactionStatus ?? 'pending',
-        qrCodeUrl         : data.qrCodeUrl,
-        deeplinkUrl       : data.deeplinkUrl ?? null,
-        grossAmount       : data.grossAmount,
-        paymentType       : data.paymentType ?? 'qris',
-        gateway           : data.gateway ?? 'doku',
-        expiryTime        : data.expiryTime ?? null,
-        boothName         : data.booth?.name || '',
-      }
-
-      dispatch( {
-        type   : 'CREATE_OK',
-        charge : chargeState,
+    createPaymentCharge( sessionId )
+      .then( ( data ) => {
+        setBoothName( data.booth?.name ?? '' )
+        useBoothStore.setState( { sessionId } )
+        setPayment( {
+          paymentStatus      : 'pending',
+          paymentOrderId     : data.orderId,
+          paymentQrCodeUrl   : data.qrCodeUrl,
+          paymentDeeplinkUrl : data.deeplinkUrl ?? null,
+          paymentGrossAmount : data.grossAmount,
+          paymentGateway     : data.gateway ?? null,
+          paymentType        : data.paymentType ?? null,
+          paymentExpiryTime  : data.expiryTime ?? null,
+        } )
       } )
-      setPayment( {
-        paymentStatus      : 'pending',
-        paymentOrderId     : data.orderId,
-        paymentQrCodeUrl   : data.qrCodeUrl,
-        paymentDeeplinkUrl : data.deeplinkUrl ?? null,
-        paymentGrossAmount : data.grossAmount,
-        paymentGateway     : data.gateway ?? null,
-        paymentType        : data.paymentType ?? null,
-        paymentExpiryTime  : data.expiryTime ?? null,
+      .catch( ( err ) => setCreateError( err instanceof Error ? err.message : 'Unknown error' ) )
+      .finally( () => {
+        creatingRef.current = false
       } )
-    } catch ( err ) {
-      dispatch( {
-        type  : 'CREATE_ERROR',
-        error : err instanceof Error ? err.message : 'Unknown error',
-      } )
-    } finally {
-      creatingRef.current = false
-    }
-  }, [sessionId, setPayment] )
+  }, [needsCharge, setPayment] )
 
-  // ── Auto-create charge when idle (no manual "Start" step) ──────
+  // ── Persist a failed charge so retry starts fresh ──────────────
   useEffect( () => {
-    if ( phase === 'idle' ) {
-      createCharge()
-    }
-  }, [phase, createCharge] )
+    if ( pollResult.status !== 'terminal' ) return
+    setPayment( { paymentStatus : pollResult.reason === 'expire' ? 'expired' : 'error' } )
+  }, [pollResult, setPayment] )
 
-  // ── Retry handler ──────────────────────────────────────────────
-  const handleRetry = useCallback( () => {
-    setPayment( {
-      paymentStatus      : 'idle',
-      paymentOrderId     : null,
-      paymentQrCodeUrl   : null,
-      paymentDeeplinkUrl : null,
-      paymentGrossAmount : null,
-      paymentGateway     : null,
-      paymentType        : null,
-      paymentExpiryTime  : null,
-    } )
-    dispatch( { type : 'RESET' } )
-    createCharge()
-  }, [createCharge, setPayment] )
+  // ── Count down after settlement, then mark paid ────────────────
+  useEffect( () => {
+    if ( !settled ) return
+    const id = setInterval( () => setCountdown( ( c ) => Math.max( 0, c - 1 ) ), 1000 )
+
+    return () => clearInterval( id )
+  }, [settled] )
+
+  useEffect( () => {
+    if ( countdown === 0 ) setPayment( { paymentStatus : 'paid' } )
+  }, [countdown, setPayment] )
+
+  const handleRetry = () => {
+    setCreateError( null )
+    setPayment( CLEARED_PAYMENT )
+  }
 
   // ── Render ─────────────────────────────────────────────────────
-
-  // Still resolving store hydration — show a neutral loader so we never
-  // flash 'idle' or stale UI before snapping to the real phase.
-  if ( phase === 'loading' || phase === 'paid' ) {
+  if ( settingsQuery.isPending || paymentDisabled || payment.status === 'paid' ) {
     return <PhaseLoading />
   }
 
-  // Fresh settlement: show countdown, then promote to 'paid' & persist.
-  if ( phase === 'settled' ) {
-    return <PhaseSettled countdown={countdown} />
-  }
+  if ( settled ) return <PhaseSettled countdown={countdown} />
 
-  if ( phase === 'creating' ) {
-    return <PhaseCreating />
-  }
+  if ( payment.status === 'expired' ) return <PhaseExpired onRetry={handleRetry} />
 
-  if ( phase === 'pending' && charge ) {
-    return <PhasePending charge={charge} />
-  }
-
-  if ( phase === 'error' ) {
+  if ( failed ) {
     return (
       <PhaseError
-        errorMsg={errorMsg}
+        errorMsg={createError ?? 'Payment failed'}
         onRetry={handleRetry}
       />
     )
   }
 
-  if ( phase === 'expired' ) {
-    return <PhaseExpired onRetry={handleRetry} />
+  if ( !hasCharge ) return <PhaseCreating />
+
+  const charge: PaymentChargeState = {
+    orderId           : payment.orderId!,
+    transactionId     : null,
+    transactionStatus : 'pending',
+    qrCodeUrl         : payment.qrCodeUrl,
+    deeplinkUrl       : payment.deeplinkUrl,
+    grossAmount       : payment.grossAmount ?? 15000,
+    paymentType       : payment.type ?? 'qris',
+    gateway           : payment.gateway ?? 'doku',
+    expiryTime        : payment.expiryTime,
+    boothName,
   }
 
-  // Fallback
-  return <PhaseFallback onRetry={handleRetry} />
+  return <PhasePending charge={charge} />
 }

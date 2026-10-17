@@ -198,6 +198,7 @@ export default function PhotoboothCard() {
             src={photo.src}
             alt={photo.hashtag}
             fill
+            sizes="(min-width: 1024px) 33vw, 100vw"
             className="object-cover object-top"
             priority={i === 0}
           />

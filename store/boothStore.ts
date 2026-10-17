@@ -204,6 +204,15 @@ function freshSessionState(): Partial<BoothState> {
     error          : null,
     globalFilter   : 'none',
     adjustments    : createDefaultAdjustments(),
+    
+    paymentStatus      : '' as const,
+    paymentOrderId     : null,
+    paymentQrCodeUrl   : null,
+    paymentDeeplinkUrl : null,
+    paymentGrossAmount : null,
+    paymentGateway     : null,
+    paymentType        : null,
+    paymentExpiryTime  : null,
   };
 }
 

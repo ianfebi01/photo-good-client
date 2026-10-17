@@ -161,13 +161,6 @@ export function StepCapture() {
 
   const [selectedSlotIdx, setSelectedSlotIdx] = useState<number | null>( null )
   const [targetSlotIdx, setTargetSlotIdx] = useState<number | null>( null )
-  const [cacheBuster, setCacheBuster] = useState( '' )
-
-  useEffect( () => {
-    const timer = setTimeout( () => setCacheBuster( String( Date.now() ) ), 0 )
-
-    return () => clearTimeout( timer )
-  }, [] )
 
   const activeSlotIdx = useMemo(
     () =>
@@ -440,7 +433,6 @@ export function StepCapture() {
               activeSlotIdx={activeSlotIdx}
               reviewing={reviewing}
               globalFilter="none"
-              cacheBuster={cacheBuster}
               isSlotInteractive={isSlotInteractive}
               onSlotClick={setSelectedSlotIdx}
               onMouseDown={handleMouseDown}

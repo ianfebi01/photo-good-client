@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef, useCallback, type CSSProperties } from 'react'
+import { useRef, useCallback, type CSSProperties } from 'react'
 import { Button } from '@/components/ui/button'
 import { useBoothStore } from '@/store/boothStore'
 import { FilterPicker } from './FilterPicker'
@@ -23,8 +23,6 @@ export function StepFilter() {
   const frame = frames.find( ( f ) => f.key === frameKey ) ?? frames[0]
   const photoCount = frame?.photoCount ?? 0
   const busy = phase === 'composing'
-
-  const [cacheBuster] = useState( () => String( Date.now() ) )
 
   const frameContainerRef = useRef<HTMLDivElement>( null )
 
@@ -101,7 +99,6 @@ export function StepFilter() {
             activeSlotIdx={activeSlotIdx}
             reviewing={reviewing}
             globalFilter={globalFilter}
-            cacheBuster={cacheBuster}
             isSlotInteractive={isSlotInteractive}
             onSlotClick={noop}
             onMouseDown={noopMouse}

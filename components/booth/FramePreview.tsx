@@ -16,7 +16,6 @@ interface FramePreviewProps {
   activeSlotIdx: number | null
   reviewing: boolean
   globalFilter: string
-  cacheBuster: string
   isSlotInteractive: ( i: number ) => boolean
   onSlotClick: ( i: number ) => void
   onMouseDown: ( e: React.MouseEvent, i: number ) => void
@@ -36,7 +35,6 @@ export function FramePreview( {
   activeSlotIdx,
   reviewing,
   globalFilter,
-  cacheBuster,
   isSlotInteractive,
   onSlotClick,
   onMouseDown,
@@ -66,7 +64,6 @@ export function FramePreview( {
             frame={frame}
             frameKey={frame.key}
             variant="overlay"
-            cacheBuster={cacheBuster}
             alt="Frame template"
             className="absolute inset-0 w-full h-full object-contain z-10 pointer-events-none"
           />

@@ -1,3 +1,5 @@
+import { useEffect } from 'react'
+
 import { Button } from '@/components/ui/button'
 import { type ClientFrame } from '@/lib/photobooth/frames.client'
 import { useBoothStore } from '@/store/boothStore'
@@ -5,7 +7,7 @@ import { ChevronRight } from 'lucide-react'
 import { QRModal } from './QRModal'
 import { StepHeader } from './StepHeader'
 import { cn } from '@/lib/utils'
-import { FrameImage } from './FrameImage'
+import { FrameImage, preloadFrameImage } from './FrameImage'
 
 export function StepSelectFrame() {
   const {
@@ -16,6 +18,12 @@ export function StepSelectFrame() {
   } = useBoothStore()
 
   const frame = frames.find( ( f ) => f.key === frameKey ) ?? frames[0]
+
+  // The capture step lays the overlay over the camera, so fetch it now and
+  // it shows instantly once the session starts.
+  useEffect( () => {
+    if ( frame ) preloadFrameImage( frame, 'overlay' )
+  }, [frame] )
 
   return (
     <div className="container mx-auto px-4 py-8 lg:py-16 flex flex-col gap-6 grow overflow-hidden">
